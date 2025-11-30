@@ -23,12 +23,51 @@ if (!fs.existsSync(SCAN_DIR)) fs.mkdirSync(SCAN_DIR);
 ============================================================ */
 
 const extractJSON = (raw) => {
-  // FIXED: Better JSON extraction with regex
-  const jsonMatch = raw.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) return null;
+  console.log("[DEBUG] Raw output length:", raw.length);
+  
+  // First, try to find the main JSON object by looking for the start and end
+  const jsonStart = raw.indexOf('{');
+  const jsonEnd = raw.lastIndexOf('}');
+  
+  if (jsonStart === -1 || jsonEnd === -1) {
+    console.log("[DEBUG] No JSON structure found");
+    return null;
+  }
+  
+  const jsonString = raw.substring(jsonStart, jsonEnd + 1);
+  console.log("[DEBUG] Extracted JSON length:", jsonString.length);
+  
   try {
-    return JSON.parse(jsonMatch[0]);
-  } catch {
+    const parsed = JSON.parse(jsonString);
+    console.log("[DEBUG] Successfully parsed JSON");
+    console.log("[DEBUG] JSON keys:", Object.keys(parsed));
+    return parsed;
+  } catch (e) {
+    console.log("[DEBUG] JSON parse error:", e.message);
+    
+    // Alternative approach: look for specific WPScan patterns
+    const patterns = [
+      /"plugins":\s*\{[^}]*\}/,
+      /"version":\s*\{[^}]*\}/
+    ];
+    
+    for (const pattern of patterns) {
+      const match = raw.match(pattern);
+      if (match) {
+        console.log("[DEBUG] Found pattern match");
+        // If we find plugin data, construct a minimal valid JSON
+        try {
+          return {
+            plugins: {},
+            version: null,
+            ...JSON.parse(`{${match[0]}}`)
+          };
+        } catch (parseError) {
+          continue;
+        }
+      }
+    }
+    
     return null;
   }
 };
@@ -59,9 +98,145 @@ const detectVersionFromUrl = async (targetUrl, slug) => {
   }
 };
 
+/* ============================================================
+   DUAL JSON FORMAT SUPPORT
+============================================================ */
+
+// Free Mode Response Format (Original)
+const generateFreeModeResponse = (results, url, apiMode) => {
+  return {
+    ok: true,
+    plugins: results.plugins || [],
+    wordpress: results.wordpress || { detected: false },
+    api_mode: apiMode,
+    scan_info: {
+      plugins_found: results.plugins?.length || 0,
+      wordpress_detected: results.wordpress?.detected || false
+    }
+  };
+};
+
+// Premium Mode Response Format (New Enhanced Format)
+const generatePremiumModeResponse = (results, url, apiKey) => {
+  const vulnerablePlugins = results.plugins?.filter(p => 
+    p.native_wpscan_vulns?.length > 0 || 
+    p.custom_analysis?.hit === true
+  ) || [];
+
+  const cleanPlugins = results.plugins?.filter(p => 
+    !p.native_wpscan_vulns?.length && 
+    p.custom_analysis?.hit !== true
+  ) || [];
+
+  // Frontend-compatible plugins array
+  const pluginsArray = results.plugins?.map(plugin => ({
+    slug: plugin.slug,
+    version: plugin.version,
+    confidence: plugin.confidence,
+    source: plugin.source,
+    vulnerable: plugin.native_wpscan_vulns?.length > 0 || plugin.custom_analysis?.hit === true
+  })) || [];
+
+  const detailedResponse = {
+    ok: true,  // Frontend compatibility
+    status: "success",
+    scan_id: `premium_scan_${Date.now()}`,
+    target: url,
+    timestamp: new Date().toISOString(),
+    mode: "premium",
+    
+    plugins: pluginsArray,  // Frontend compatibility
+    
+    summary: {
+      total_plugins_scanned: results.plugins?.length || 0,
+      vulnerable_plugins: vulnerablePlugins.length,
+      clean_plugins: cleanPlugins.length,
+      wordpress_vulnerabilities: results.wordpress?.vulnerabilities?.length || 0,
+      risk_level: vulnerablePlugins.length > 0 ? "HIGH" : "LOW",
+      scan_duration: "N/A"
+    },
+
+    vulnerabilities: vulnerablePlugins.map(plugin => ({
+      plugin: plugin.slug,
+      version: plugin.version,
+      confidence: plugin.confidence,
+      risk_score: calculateRiskScore(plugin),
+      findings: [
+        ...(plugin.native_wpscan_vulns || []).map(vuln => ({
+          source: "WPScan Database",
+          type: "vulnerability",
+          cve: vuln.id || "Unknown",
+          severity: vuln.severity || "High",
+          title: vuln.title || "Unknown vulnerability",
+          fixed_in: vuln.fixed_in || "Unknown",
+          references: vuln.references || []
+        })),
+        ...(plugin.custom_analysis?.hit ? [{
+          source: plugin.custom_analysis.source,
+          type: "custom_analysis",
+          cve: plugin.custom_analysis.cve || "AI-Detected",
+          severity: plugin.custom_analysis.severity || "High",
+          title: plugin.custom_analysis.description || "Potential vulnerability detected",
+          layer: plugin.custom_analysis.layer
+        }] : [])
+      ]
+    })),
+
+    wordpress_core: results.wordpress ? {
+      version: results.wordpress.version,
+      status: results.wordpress.status,
+      vulnerabilities: results.wordpress.vulnerabilities?.map(vuln => ({
+        cve: vuln.id,
+        severity: vuln.severity,
+        title: vuln.title,
+        fixed_in: vuln.fixed_in,
+        references: vuln.references
+      })) || []
+    } : null,
+
+    clean_plugins: cleanPlugins.map(plugin => ({
+      plugin: plugin.slug,
+      version: plugin.version,
+      confidence: plugin.confidence,
+      status: "clean"
+    })),
+
+    metadata: {
+      api_used: "VMScan Premium",
+      detection_method: "Aggressive Enumeration",
+      layers_applied: ["WPScan DB", "Local Rules", "External APIs", "AI Analysis"],
+      timestamp: new Date().toISOString()
+    }
+  };
+
+  return detailedResponse;
+};
+
+// Helper function to calculate risk score
+const calculateRiskScore = (plugin) => {
+  let score = 0;
+  
+  if (plugin.native_wpscan_vulns?.length > 0) {
+    score += plugin.native_wpscan_vulns.length * 25;
+    
+    const highSeverityCount = plugin.native_wpscan_vulns.filter(v => 
+      v.severity?.toLowerCase() === 'high'
+    ).length;
+    score += highSeverityCount * 15;
+  }
+  
+  if (plugin.custom_analysis?.hit) {
+    score += 30;
+    if (plugin.custom_analysis.severity?.toLowerCase().includes('high')) {
+      score += 20;
+    }
+  }
+  
+  return Math.min(score, 100);
+};
+
 // --- CORE LOGIC: Multi-Layer Analysis with Verbose Logging ---
 const analyzePluginRisk = async (slug, version) => {
-  // 0. Sanity Check
   if (!version || version === "Unknown") {
     console.log(`   [Skip] ${slug} - No version detected`);
     return { slug, version, risk: "Unknown Version", source: "Skipped" };
@@ -70,12 +245,9 @@ const analyzePluginRisk = async (slug, version) => {
   const versionClean = version.trim();
   console.log(`   [Analyze] checking ${slug} v${versionClean} across 3 Layers...`);
 
-  // ============================================================
-  // LAYER 1: Local Database (Hardcoded Rules)
-  // ============================================================
-  // เหตุผล: เร็วที่สุด ไม่ต้องต่อเน็ต เช็คของตาย
+  // LAYER 1: Local Database
   const localRules = {
-    "social-warfare": { "3.5.2": { cve: "CVE-2019-9978", severity: "High (RCE)" } }, // ตัวอย่างที่คุณเจอ
+    "social-warfare": { "3.5.2": { cve: "CVE-2019-9978", severity: "High (RCE)" } },
     "wp-time-capsule": { "1.21.15": { cve: "CVE-2020-8772", severity: "Critical" } },
     "contact-form-7": { "5.1": { cve: "CVE-2020-35489", severity: "High" } },
     "akismet": { "4.1.0": { cve: "CVE-2021-24276", severity: "Medium" } },
@@ -92,13 +264,10 @@ const analyzePluginRisk = async (slug, version) => {
     console.log(`   ❌ [Layer 1] Miss`);
   }
 
-  // ============================================================
-  // LAYER 2: External APIs (CIRCL.LU / CVE.LIVE)
-  // ============================================================
-  // เหตุผล: ฐานข้อมูลกว้างกว่า ครอบคลุม CVE สาธารณะ
+  // LAYER 2: External APIs
   try {
     const apiSources = [
-      `https://cve.circl.lu/api/vulnerability/browse/${slug}` // Source 1
+      `https://cve.circl.lu/api/vulnerability/browse/${slug}`
     ];
 
     for (const endpoint of apiSources) {
@@ -107,10 +276,8 @@ const analyzePluginRisk = async (slug, version) => {
        
        if (apiRes.ok) {
          const data = await apiRes.json();
-         // รองรับโครงสร้างข้อมูลที่ต่างกันของแต่ละ API
          const vulns = data.results || data.data || data.vulnerabilities || [];
          
-         // ค้นหาว่ามี version ของเราอยู่ในรายการไหม
          const hit = vulns.find(v => v.summary && v.summary.includes(versionClean));
          
          if (hit) {
@@ -130,10 +297,7 @@ const analyzePluginRisk = async (slug, version) => {
     console.error(`   ⚠️ [Layer 2] Error: ${e.message}`);
   }
 
-  // ============================================================
-  // LAYER 3: AI Agent (WebSocket)
-  // ============================================================
-  // เหตุผล: ใช้ AI วิเคราะห์ความสัมพันธ์ หรือหา Zero-day pattern ที่ Database ยังไม่อัปเดต
+  // LAYER 3: AI Agent
   try {
     console.log(`   ⏳ [Layer 3] Connecting to AI Agent (${AI_WS_URL})...`);
     
@@ -141,7 +305,6 @@ const analyzePluginRisk = async (slug, version) => {
       const ws = new WebSocket(AI_WS_URL);
       let isDone = false;
       
-      // Timeout 5 วินาทีต่อ 1 Plugin เพื่อไม่ให้รอนานเกินไป
       const timeout = setTimeout(() => { 
         if (!isDone) {
           ws.close(); 
@@ -191,57 +354,163 @@ const analyzePluginRisk = async (slug, version) => {
     console.error(`   ⚠️ [Layer 3] Connection Failed: ${e.message}`);
   }
 
-  // Final: ถ้าไม่เจอเลย
   console.log(`   🟢 [Clean] No known vulnerabilities found.`);
   return { hit: false, status: "Clean", message: "No CVEs found in 3 layers" };
 };
 
+// Extracted local rules so other endpoints can reuse them
+const LOCAL_RULES = {
+  "social-warfare": { "3.5.2": { cve: "CVE-2019-9978", severity: "High (RCE)" } },
+  "wp-time-capsule": { "1.21.15": { cve: "CVE-2020-8772", severity: "Critical" } },
+  "contact-form-7": { "5.1": { cve: "CVE-2020-35489", severity: "High" } },
+  "akismet": { "4.1.0": { cve: "CVE-2021-24276", severity: "Medium" } },
+};
+
+// Layer-specific check helpers (used by frontend Analyze button)
+const checkLayer1 = (slug, version) => {
+  const v = (version || "").toString().trim();
+  if (LOCAL_RULES[slug] && LOCAL_RULES[slug][v]) {
+    return { hit: true, source: "Layer 1 (Local)", ...LOCAL_RULES[slug][v], layer: 1 };
+  }
+  return { hit: false, source: "Layer 1 (Local)", layer: 1 };
+};
+
+const checkLayer2 = async (slug, version) => {
+  try {
+    const endpoint = `https://cve.circl.lu/api/vulnerability/browse/${slug}`;
+    const apiRes = await fetch(endpoint);
+    if (!apiRes.ok) return { hit: false, source: "Layer 2 (External API)", layer: 2 };
+    const data = await apiRes.json();
+    const vulns = data.results || data.data || data.vulnerabilities || [];
+    const hit = vulns.find(v => v.summary && version && v.summary.includes(version.toString().trim()));
+    if (hit) {
+      return { hit: true, source: "Layer 2 (External API)", cve: hit.id || hit.CVE || hit.cve, severity: hit.severity || "High (API Detected)", description: hit.summary || "", layer: 2 };
+    }
+    return { hit: false, source: "Layer 2 (External API)", layer: 2 };
+  } catch (e) {
+    return { hit: false, source: "Layer 2 (External API)", layer: 2, error: e.message };
+  }
+};
+
+const checkLayer3 = async (slug, version) => {
+  try {
+    const aiResult = await new Promise((resolve) => {
+      const ws = new WebSocket(AI_WS_URL);
+      let done = false;
+      const timeout = setTimeout(() => { if (!done) { done = true; ws.close(); resolve(null); } }, 300000);
+      ws.on("open", () => {
+        ws.send(JSON.stringify({ type: "request", request_id: `risk_${slug}_${Date.now()}`, params: { slug, version } }));
+      });
+      ws.on("message", (msg) => {
+        try {
+          const data = JSON.parse(msg.toString());
+          if (!done && data.type === "response") { done = true; clearTimeout(timeout); ws.close(); resolve(data); }
+        } catch (e) { /* ignore parse errors */ }
+      });
+      ws.on("error", () => { if (!done) { done = true; clearTimeout(timeout); resolve(null); } });
+    });
+    if (aiResult && aiResult.cves && aiResult.cves.length > 0) {
+      return { hit: true, source: "Layer 3 (AI Agent)", cve: aiResult.cves[0].id || aiResult.cves[0], severity: "AI Detected", layer: 3 };
+    }
+    return { hit: false, source: "Layer 3 (AI Agent)", layer: 3 };
+  } catch (e) {
+    return { hit: false, source: "Layer 3 (AI Agent)", layer: 3, error: e.message };
+  }
+};
+
+// Layer endpoints used by frontend Analyze button
+app.get('/cve/layer1', async (req, res) => {
+  const { slug, version } = req.query;
+  if (!slug || !version) return res.status(400).json({ ok: false, error: 'Missing slug or version' });
+  const result = checkLayer1(slug, version);
+  return res.json({ ok: true, ...result });
+});
+
+app.get('/cve/layer2', async (req, res) => {
+  const { slug, version } = req.query;
+  if (!slug || !version) return res.status(400).json({ ok: false, error: 'Missing slug or version' });
+  const result = await checkLayer2(slug, version);
+  return res.json({ ok: true, ...result });
+});
+
+app.get('/cve/layer3', async (req, res) => {
+  const { slug, version } = req.query;
+  if (!slug || !version) return res.status(400).json({ ok: false, error: 'Missing slug or version' });
+  const result = await checkLayer3(slug, version);
+  return res.json({ ok: true, ...result });
+});
+
+// Combined analyze endpoint that runs layers in sequence (used by fuzz analyze)
+app.get('/cve/analyze', async (req, res) => {
+  const { slug, version } = req.query;
+  if (!slug || !version) return res.status(400).json({ ok: false, error: 'Missing slug or version' });
+
+  const analysis = [];
+  const l1 = checkLayer1(slug, version);
+  analysis.push(l1);
+  if (l1.hit) return res.json({ ok: true, analysis: { final_result: l1, layers: analysis } });
+
+  const l2 = await checkLayer2(slug, version);
+  analysis.push(l2);
+  if (l2.hit) return res.json({ ok: true, analysis: { final_result: l2, layers: analysis } });
+
+  const l3 = await checkLayer3(slug, version);
+  analysis.push(l3);
+  if (l3.hit) return res.json({ ok: true, analysis: { final_result: l3, layers: analysis } });
+
+  return res.json({ ok: true, analysis: { final_result: { hit: false, source: 'none' }, layers: analysis } });
+});
+
 /* ============================================================
-   ROUTE 1: WPScan (Fixed command structure)
+   MAIN PLUGINS ROUTE WITH DUAL JSON FORMAT
 ============================================================ */
 app.get("/plugins", async (req, res) => {
-  const { url, apiKey } = req.query;
+  const { url, apiKey, format = "auto" } = req.query;
   
   if (!url || !url.startsWith("http")) {
     return res.status(400).json({ error: "Valid URL starting with http required" });
   }
 
-  console.log(`[WPScan] Running scan on ${url}`);
+  console.log(`[WPScan] Running scan on ${url}, API Key: ${apiKey ? "Provided" : "Not provided"}`);
   const hasDocker = await checkDocker();
+  
   if (!hasDocker) {
-    console.log("[WPScan] Docker not available, using fallback");
     return res.json({ 
       ok: true, 
       plugins: [],
-      warning: "Docker not available - using fallback detection",
+      warning: "Docker not available",
       data: await fallbackPluginDetection(url)
     });
   }
 
-  // CORRECTED WPScan command structure
+  // Determine scan mode and format
+  const isPremiumMode = apiKey && apiKey.trim();
+  const responseFormat = format === "premium" ? "premium" : (isPremiumMode ? "premium" : "free");
+
+  console.log(`[WPScan] Mode: ${isPremiumMode ? "PREMIUM" : "FREE"}, Format: ${responseFormat}`);
+
+  // Build WPScan command based on mode
   const args = [
     "run", "--rm", "wpscanteam/wpscan",
     "--url", url,
-    "--enumerate", "ap", // v = vulnerable plugins, p = all plugins
     "--format", "json",
     "--no-banner",
-    "--random-user-agent",
-    "--max-threads", "10"
+    "--random-user-agent"
   ];
 
-  // Handle API key properly
-  if (apiKey && apiKey.trim()) {
-    // Remove any --no-api flag and add API token
-    const noApiIndex = args.indexOf("--no-api");
-    if (noApiIndex !== -1) args.splice(noApiIndex, 1);
-    
-    args.push("--detection-mode", "aggressive");
+  if (isPremiumMode) {
     args.push("--api-token", apiKey.trim());
-    console.log(`[WPScan] Using premium API mode`);
+    args.push("--enumerate", "ap");
+    args.push("--detection-mode", "aggressive");
+    args.push("--max-threads", "15");
+    args.push("--request-timeout", "3000");
+    console.log(`[WPScan] PREMIUM MODE: Full aggressive enumeration`);
   } else {
-    // Free mode - use passive detection to avoid API limits
+    args.push("--enumerate", "ap");
     args.push("--plugins-detection", "aggressive");
-    console.log(`[WPScan] Using free mode`);
+    args.push("--max-threads", "15");
+    args.push("--request-timeout", "3000");
+    console.log(`[WPScan] FREE MODE: Basic vulnerability scan`);
   }
 
   console.log(`[WPScan] Command: docker ${args.join(' ')}`);
@@ -253,7 +522,6 @@ app.get("/plugins", async (req, res) => {
   proc.stdout.on("data", (data) => {
     const chunk = data.toString();
     stdout += chunk;
-    // Log first part for debugging
     if (stdout.length < 500) {
       console.log("[WPScan][stdout]", chunk.substring(0, 200));
     }
@@ -266,78 +534,159 @@ app.get("/plugins", async (req, res) => {
   });
 
   proc.on("close", async (code) => {
-    console.log(`[WPScan] Process exited with code ${code}`);
-    
-    // Handle common errors
-    if (code !== 0) {
-      if (stderr.includes("Cannot connect to the Docker daemon")) {
-        return res.json({ 
-          ok: false, 
-          error: "Docker daemon not running. Start Docker Desktop.",
-          code: code
-        });
-      }
-      
-      if (stderr.includes("The target is not running WordPress")) {
-        return res.json({ 
-          ok: true, 
-          plugins: [],
-          warning: "Target does not appear to be running WordPress",
-          wordpress: { detected: false }
-        });
-      }
-      
-      if (stderr.includes("No such image")) {
-        return res.json({ 
-          ok: false, 
-          error: "WPScan Docker image not found. Run: docker pull wpscanteam/wpscan",
-          code: code
-        });
-      }
-    }
-
-    const json = extractJSON(stdout + "\n" + stderr);
-    
-    if (!json) {
-      console.log("[WPScan] Failed to extract JSON from output");
-      console.log("[WPScan] stdout preview:", stdout.substring(0, 300));
-      console.log("[WPScan] stderr preview:", stderr.substring(0, 300));
-      
-      return res.json({ 
-        ok: true, 
-        plugins: [],
-        warning: "WPScan output could not be parsed, using fallback detection",
-        data: await fallbackPluginDetection(url)
+  console.log(`[WPScan] Process exited with code ${code}`);
+  
+  // Handle API token errors specifically for premium mode
+  if (isPremiumMode && code === 5) {
+    const errorOutput = stdout + stderr;
+    if (errorOutput.includes("Invalid API Token") || errorOutput.includes("API token")) {
+      console.log("[WPScan] API Token error detected");
+      return res.json({
+        ok: false,
+        error: "Invalid WPScan API Token",
+        details: "The provided API token is invalid or has expired",
+        solution: "Get a valid API token from https://wpscan.com/register"
       });
     }
+  }
+  
+  if (code !== 0) {
+    if (stderr.includes("Cannot connect to the Docker daemon")) {
+      return res.json({ 
+        ok: false, 
+        error: "Docker daemon not running. Start Docker Desktop.",
+        code: code
+      });
+    }
+    
+    if (stderr.includes("The target is not running WordPress")) {
+      return res.json(generateFreeModeResponse(
+        { plugins: [], wordpress: { detected: false } }, 
+        url, 
+        isPremiumMode ? "premium" : "free"
+      ));
+    }
+  }
 
-    // Process detected plugins
-    const detectedPlugins = [];
-    if (json.plugins && Object.keys(json.plugins).length > 0) {
+  const json = extractJSON(stdout + "\n" + stderr);
+  
+  if (!json) {
+    console.log("[WPScan] Failed to extract JSON from output");
+    return res.json(generateFreeModeResponse(
+      { plugins: [], wordpress: { detected: false } }, 
+      url, 
+      isPremiumMode ? "premium" : "free"
+    ));
+  }
+
+  // Check if plugins object is empty due to API error
+  if (isPremiumMode && json.plugins && Object.keys(json.plugins).length === 0) {
+    console.log("[WPScan] Empty plugins object detected, checking for API errors");
+    
+    // Look for API error messages in the output
+    if (json.vuln_api && json.vuln_api.error) {
+      console.log("[WPScan] API Error:", json.vuln_api.error);
+      
+      // Fall back to free mode scanning without API
+      console.log("[WPScan] Falling back to free mode scanning...");
+      const freeArgs = [
+        "run", "--rm", "wpscanteam/wpscan",
+        "--url", url,
+        "--format", "json",
+        "--no-banner",
+        "--random-user-agent",
+        "--enumerate", "ap",
+        "--plugins-detection", "aggressive",
+        "--max-threads", "15",
+        "--request-timeout", "3000"
+      ];
+      
+      console.log(`[WPScan] Fallback command: docker ${freeArgs.join(' ')}`);
+      
+      try {
+        const fallbackResult = await new Promise((resolve) => {
+          const fallbackProc = spawn("docker", freeArgs);
+          let fallbackStdout = "";
+          let fallbackStderr = "";
+          
+          fallbackProc.stdout.on("data", (data) => fallbackStdout += data.toString());
+          fallbackProc.stderr.on("data", (data) => fallbackStderr += data.toString());
+          
+          fallbackProc.on("close", (fallbackCode) => {
+            console.log(`[WPScan] Fallback process exited with code ${fallbackCode}`);
+            if (fallbackCode === 0) {
+              const fallbackJson = extractJSON(fallbackStdout + "\n" + fallbackStderr);
+              resolve(fallbackJson);
+            } else {
+              resolve(null);
+            }
+          });
+        });
+        
+        if (fallbackResult) {
+          console.log("[WPScan] Fallback scan successful, using free mode data");
+          json.plugins = fallbackResult.plugins || {};
+          json.version = fallbackResult.version || json.version;
+        }
+      } catch (fallbackError) {
+        console.log("[WPScan] Fallback scan failed:", fallbackError.message);
+      }
+    }
+  }
+
+  // Process detected plugins
+  const detectedPlugins = [];
+  if (json.plugins && Object.keys(json.plugins).length > 0) {
+    console.log("[DEBUG] Processing plugins object:", Object.keys(json.plugins));
+    
+    // Handle both object format: {"plugin1": {...}, "plugin2": {...}}
+    if (typeof json.plugins === 'object' && !Array.isArray(json.plugins)) {
+      // Object format (original WPScan)
       for (const [slug, info] of Object.entries(json.plugins)) {
+        console.log(`[DEBUG] Processing plugin: ${slug}`, info);
         detectedPlugins.push({
           slug: slug,
-          version: info.version?.number || "Unknown",
+          version: info.version?.number || info.version || "Unknown",
           confidence: info.confidence || 100,
-          source: apiKey ? "wpscan_premium" : "wpscan_free",
+          source: isPremiumMode ? "wpscan_premium" : "wpscan_free",
           wpscan_vulns: info.vulnerabilities || [],
           found_by: info.found_by || []
         });
       }
-      console.log(`[WPScan] Found ${detectedPlugins.length} plugins`);
-    } else {
-      console.log("[WPScan] No plugins found in scan results");
+    } else if (Array.isArray(json.plugins)) {
+      // Array format (alternative format)
+      for (const plugin of json.plugins) {
+        detectedPlugins.push({
+          slug: plugin.slug || plugin.name || "unknown",
+          version: plugin.version?.number || plugin.version || "Unknown",
+          confidence: plugin.confidence || 100,
+          source: isPremiumMode ? "wpscan_premium" : "wpscan_free",
+          wpscan_vulns: plugin.vulnerabilities || [],
+          found_by: plugin.found_by || []
+        });
+      }
     }
+    console.log(`[WPScan] Found ${detectedPlugins.length} plugins`);
+  } else {
+    console.log("[WPScan] No plugins found in scan results");
+    console.log("[DEBUG] json.plugins value:", json.plugins);
+    console.log("[DEBUG] json.plugins type:", typeof json.plugins);
+    
+    if (isPremiumMode && detectedPlugins.length === 0) {
+      console.log("[WPScan] Premium mode found no plugins, trying enhanced detection...");
+      const enhancedPlugins = await enhancedPluginDetection(url);
+      detectedPlugins.push(...enhancedPlugins);
+    }
+  }
 
-    // Analyze plugins with our custom layers
-    let analysisResults = [];
-    if (detectedPlugins.length > 0) {
-      console.log(`[Analysis] Checking ${detectedPlugins.length} plugins against Layer 1-3...`);
+  // Analyze plugins
+  let analysisResults = [];
+  if (detectedPlugins.length > 0) {
+    if (isPremiumMode) {
+      console.log(`[Premium Analysis] Checking ${detectedPlugins.length} plugins against Layer 1-3...`);
       
-      // Process plugins in small batches
-      const BATCH_SIZE = 3;
-      for (let i = 0; i < detectedPlugins.length; i += BATCH_SIZE) {
-        const batch = detectedPlugins.slice(i, i + BATCH_SIZE);
+      for (let i = 0; i < detectedPlugins.length; i += 2) {
+        const batch = detectedPlugins.slice(i, i + 2);
         const batchResults = await Promise.all(batch.map(async (p) => {
           const riskReport = await analyzePluginRisk(p.slug, p.version);
           
@@ -352,47 +701,61 @@ app.get("/plugins", async (req, res) => {
         }));
         
         analysisResults.push(...batchResults);
-        // Small delay between batches
-        if (i + BATCH_SIZE < detectedPlugins.length) {
-          await new Promise(resolve => setTimeout(resolve, 800));
-        }
+        await new Promise(resolve => setTimeout(resolve, 1000));
       }
+    } else {
+      console.log(`[Free Analysis] Basic analysis for ${detectedPlugins.length} plugins`);
+      analysisResults = detectedPlugins.map(p => ({
+        slug: p.slug,
+        version: p.version,
+        confidence: p.confidence,
+        source: p.source,
+        native_wpscan_vulns: p.wpscan_vulns,
+        custom_analysis: { hit: false, status: "Free mode - limited analysis" }
+      }));
     }
+  }
 
-    // Prepare WordPress info
-    const wordpressInfo = json.version ? {
-      wordpress_version: json.version.number,
-      wordpress_status: json.version.status,
-      wordpress_vulnerabilities: json.version.vulnerabilities || [],
-      detected: true
-    } : {
-      detected: false,
-      message: "WordPress version not detected"
-    };
+  // Prepare WordPress info
+  const wordpressInfo = json.version ? {
+    version: json.version.number || json.version,
+    status: json.version.status || "unknown",
+    vulnerabilities: json.version.vulnerabilities || [],
+    detected: true
+  } : (json.wordpress_version ? {
+    version: json.wordpress_version,
+    status: "detected",
+    vulnerabilities: [],
+    detected: true
+  } : {
+    detected: false,
+    message: "WordPress version not detected"
+  });
 
-    // Save report
-    const report = {
-      target: url,
-      timestamp: new Date().toISOString(),
-      tool: "WPScan + Custom Layers",
-      wordpress: wordpressInfo,
-      results: analysisResults
-    };
-    
-    const filename = path.join(SCAN_DIR, `wpscan_${Date.now()}.json`);
-    fs.writeFileSync(filename, JSON.stringify(report, null, 2));
-    console.log(`[WPScan] Report saved to ${filename}`);
+  // Generate appropriate response format
+  const results = {
+    plugins: analysisResults,
+    wordpress: wordpressInfo
+  };
 
-    res.json({ 
-      ok: true, 
-      plugins: analysisResults,
-      wordpress: wordpressInfo,
-      api_mode: apiKey ? "premium" : "free",
-      scan_info: {
-        plugins_found: analysisResults.length,
-        wordpress_detected: wordpressInfo.detected
-      }
-    });
+  let response;
+  if (responseFormat === "premium") {
+    response = generatePremiumModeResponse(results, url, apiKey);
+    // Add 'found' flag for frontend compatibility
+    response.found = (response.vulnerabilities && response.vulnerabilities.length > 0) || (response.wordpress_core && response.wordpress_core.vulnerabilities && response.wordpress_core.vulnerabilities.length > 0);
+  } else {
+    response = generateFreeModeResponse(results, url, isPremiumMode ? "premium" : "free");
+    response.found = response.plugins && response.plugins.length > 0;
+  }
+
+  // Save report (create copy without circular references for JSON serialization)
+  const filename = path.join(SCAN_DIR, `scan_${isPremiumMode ? 'premium' : 'free'}_${Date.now()}.json`);
+  const reportToSave = JSON.parse(JSON.stringify(response)); // Deep clone to remove circular refs
+  fs.writeFileSync(filename, JSON.stringify(reportToSave, null, 2));
+  console.log(`[WPScan] Report saved to ${filename}`);
+  console.log(`[WPScan] Response summary - Mode: ${responseFormat}, Found: ${response.found}, Vulnerabilities: ${response.vulnerabilities ? response.vulnerabilities.length : 0}`);
+
+  res.json(response);
   });
 
   proc.on("error", (error) => {
@@ -404,9 +767,8 @@ app.get("/plugins", async (req, res) => {
     });
   });
 });
-
 /* ============================================================
-   FFUF ROUTE - WITH SCAN FILE SAVING
+   FFUF ROUTE
 ============================================================ */
 app.get("/fuzz", async (req, res) => {
   const { url } = req.query;
@@ -448,18 +810,15 @@ app.get("/fuzz", async (req, res) => {
     try {
       let foundPlugins = [];
 
-      // CLEAN ANSI ESCAPE CODES
       const cleanStdout = stdout.replace(/\u001b\[2K/g, '').replace(/\u001b\[[0-9;]*m/g, '');
       const cleanStderr = stderr.replace(/\u001b\[2K/g, '').replace(/\u001b\[[0-9;]*m/g, '');
       
-      // COMBINE BOTH STDOUT AND STDERR
       const combinedOutput = cleanStdout + cleanStderr;
       const lines = combinedOutput.split('\n');
       
       for (const line of lines) {
         if (!line.trim() || line.includes(':: Method') || line.includes('_______')) continue;
         
-        // Look for plugin result lines
         if (line.includes('[Status:') && line.includes(']')) {
           const bracketIndex = line.indexOf('[');
           if (bracketIndex > 0) {
@@ -477,7 +836,6 @@ app.get("/fuzz", async (req, res) => {
 
       console.log(`[FFUF] Final found plugins:`, foundPlugins);
 
-      // Analyze found plugins
       const analysisResults = [];
       for (const plugin of foundPlugins) {
         try {
@@ -506,7 +864,6 @@ app.get("/fuzz", async (req, res) => {
         }
       }
 
-      // SAVE COMPREHENSIVE REPORT TO SCANS FOLDER
       const report = {
         target: url,
         timestamp: new Date().toISOString(),
@@ -518,7 +875,7 @@ app.get("/fuzz", async (req, res) => {
           analyzed_plugins: analysisResults.length,
           vulnerable_plugins: analysisResults.filter(item => item.vulnerable).length,
           scan_duration: "N/A",
-          status_codes_found: ["403", "500"] // Based on your results
+          status_codes_found: ["403", "500"]
         },
         raw_ffuf_output: {
           stdout: cleanStdout,
@@ -534,7 +891,6 @@ app.get("/fuzz", async (req, res) => {
       fs.writeFileSync(filepath, JSON.stringify(report, null, 2));
       console.log(`[FFUF] Scan report saved to: ${filepath}`);
 
-      // Return response to frontend
       res.json({
         ok: true,
         found: analysisResults.length,
@@ -564,8 +920,84 @@ app.get("/fuzz", async (req, res) => {
   });
 });
 
+const enhancedPluginDetection = async (url) => {
+  console.log(`[Enhanced Detection] Scanning ${url} for plugins...`);
+  const plugins = [];
+  
+  try {
+    const commonPlugins = [
+      'akismet', 'contact-form-7', 'yoast-seo', 'wordfence', 
+      'woocommerce', 'elementor', 'jetpack', 'all-in-one-seo-pack',
+      'wp-super-cache', 'really-simple-ssl', 'google-site-kit',
+      'litespeed-cache', 'redirection', 'broken-link-checker',
+      'social-warfare', 'wp-time-capsule', 'iwp-client',
+      'wp-advanced-search', 'wp-file-upload'
+    ];
+    
+    for (const plugin of commonPlugins) {
+      try {
+        const pluginUrl = `${url}/wp-content/plugins/${plugin}/`;
+        const response = await fetch(pluginUrl, { 
+          method: 'HEAD',
+          timeout: 5000 
+        });
+        
+        if (response.status === 200 || response.status === 403) {
+          let version = "Unknown";
+          try {
+            // Try multiple methods to detect version
+            const readmeResponse = await fetch(`${pluginUrl}readme.txt`);
+            if (readmeResponse.status === 200) {
+              const text = await readmeResponse.text();
+              const versionMatch = text.match(/Stable tag:\s*([0-9.]+)/i);
+              if (versionMatch) version = versionMatch[1];
+            }
+            
+            // If no version from readme, try the plugin file
+            if (version === "Unknown") {
+              const pluginFileResponse = await fetch(`${pluginUrl}${plugin}.php`);
+              if (pluginFileResponse.status === 200) {
+                const pluginText = await pluginFileResponse.text();
+                const versionMatch = pluginText.match(/Version:\s*([0-9.]+)/i);
+                if (versionMatch) version = versionMatch[1];
+              }
+            }
+          } catch (e) {
+            // Couldn't read version info, but plugin exists
+          }
+          
+          plugins.push({
+            slug: plugin,
+            version: version,
+            confidence: 80,
+            source: "enhanced_detection",
+            found_by: ["directory_enumeration"]
+          });
+        }
+        await new Promise(resolve => setTimeout(resolve, 200));
+      } catch (e) {
+        // Plugin not found or error, continue
+      }
+    }
+    
+    console.log(`[Enhanced Detection] Found ${plugins.length} plugins`);
+    return plugins;
+    
+  } catch (error) {
+    console.error(`[Enhanced Detection] Error: ${error.message}`);
+    return [];
+  }
+};
+
+// Add missing fallbackPluginDetection function
+const fallbackPluginDetection = async (url) => {
+  console.log(`[Fallback Detection] Scanning ${url} for plugins...`);
+  // Implement basic plugin detection logic here
+  return [];
+};
+
 /* ============================================================
-   EXISTING ROUTES (Keep your original routes 2-6)
+   EXISTING ROUTES
 ============================================================ */
 app.get("/hashdb", async (req, res) => {
   const { url, slug } = req.query;
@@ -600,466 +1032,7 @@ app.get("/hashdb", async (req, res) => {
   }
 });
 
-/* ============================================================
-   ENHANCED CORE LOGIC: Complete 3-layer analysis flow
-============================================================ */
-const analyzePluginWithLayers = async (slug, version) => {
-  if (!version || version === "Unknown") {
-    return { 
-      slug, 
-      version, 
-      status: "skipped", 
-      reason: "Unknown version", 
-      risk_level: "unknown" 
-    };
-  }
-
-  console.log(`[CVE Flow] Starting 3-layer analysis for ${slug} v${version}`);
-  
-  const analysisResult = {
-    slug,
-    version,
-    layers: [],
-    final_result: null,
-    risk_level: "clean"
-  };
-
-  // Layer 1: Local Database
-  console.log(`[Layer 1] Checking local rules for ${slug}...`);
-  const layer1Result = await checkLayer1(slug, version);
-  analysisResult.layers.push({
-    name: "Layer 1 - Local Rules",
-    result: layer1Result
-  });
-
-  if (layer1Result.hit) {
-    analysisResult.final_result = layer1Result;
-    analysisResult.risk_level = "high";
-    console.log(`[CVE Flow] ✅ Vulnerability found in Layer 1: ${layer1Result.cve}`);
-    return analysisResult;
-  }
-
-  // Layer 2: External APIs
-  console.log(`[Layer 2] Querying external APIs for ${slug}...`);
-  const layer2Result = await checkLayer2(slug, version);
-  analysisResult.layers.push({
-    name: "Layer 2 - External APIs", 
-    result: layer2Result
-  });
-
-  if (layer2Result.hit) {
-    analysisResult.final_result = layer2Result;
-    analysisResult.risk_level = "high";
-    console.log(`[CVE Flow] ✅ Vulnerability found in Layer 2: ${layer2Result.cve}`);
-    return analysisResult;
-  }
-
-  // Layer 3: AI Agent
-  console.log(`[Layer 3] Activating AI agent for ${slug}...`);
-  const layer3Result = await checkLayer3(slug, version);
-  analysisResult.layers.push({
-    name: "Layer 3 - AI Agent",
-    result: layer3Result
-  });
-
-  if (layer3Result.hit) {
-    analysisResult.final_result = layer3Result;
-    analysisResult.risk_level = "high"; 
-    console.log(`[CVE Flow] ✅ Vulnerability found in Layer 3: ${layer3Result.cves?.length || 'unknown'} CVEs`);
-    return analysisResult;
-  }
-
-  // No vulnerabilities found
-  analysisResult.final_result = {
-    hit: false,
-    status: "clean",
-    message: "No vulnerabilities detected across all 3 layers"
-  };
-  console.log(`[CVE Flow] ✅ No vulnerabilities found for ${slug} v${version}`);
-  
-  return analysisResult;
-};
-
-// Individual layer functions
-const checkLayer1 = async (slug, version) => {
-  const localRules = {
-    "contact-form-7": {
-      "5.1": { cve: "CVE-2020-35489", severity: "High", description: "Unauthenticated SQL Injection" },
-    },
-    "akismet": {
-      "4.1.0": { cve: "CVE-2021-24276", severity: "Medium", description: "Cross-Site Scripting" },
-    },
-    "social-warfare": {
-      "3.5.2": { cve: "CVE-2019-9978", severity: "High", description: "Remote Code Execution" }
-    },
-    "wp-advanced-search": {
-      "3.3.3": { cve: "CVE-2020-10899", severity: "Medium", description: "SQL Injection" }
-    }
-  };
-
-  if (localRules[slug] && localRules[slug][version]) {
-    return {
-      hit: true,
-      source: "Local Database",
-      ...localRules[slug][version],
-      layer: 1
-    };
-  }
-
-  return { hit: false, layer: 1, message: "No local rules matched" };
-};
-
-const checkLayer2 = async (slug, version) => {
-  const sources = [
-    { name: "CIRCL", url: `https://cve.circl.lu/api/search/${slug}` },
-    { name: "CVE Live", url: `https://api.cve.live/v1/products/${slug}` }
-  ];
-
-  for (const source of sources) {
-    try {
-      console.log(`[Layer 2] Checking ${source.name} API...`);
-      const response = await fetch(source.url, { timeout: 10000 });
-      
-      if (response.ok) {
-        const data = await response.json();
-        const vulns = data.results || data.data || data.vulnerabilities || [];
-        
-        // Look for version-specific vulnerabilities
-        const versionHit = vulns.find(v => 
-          v.summary && v.summary.includes(version)
-        );
-        
-        if (versionHit) {
-          return {
-            hit: true,
-            source: `Layer 2 - ${source.name}`,
-            cve: versionHit.id,
-            severity: "High",
-            description: versionHit.summary?.substring(0, 200) || "No description",
-            layer: 2
-          };
-        }
-
-        // Look for any vulnerabilities for this plugin
-        const pluginHit = vulns.find(v => 
-          v.summary && v.summary.toLowerCase().includes(slug.toLowerCase())
-        );
-
-        if (pluginHit) {
-          return {
-            hit: true,
-            source: `Layer 2 - ${source.name}`,
-            cve: pluginHit.id,
-            severity: "Medium",
-            description: `Plugin vulnerability: ${pluginHit.summary?.substring(0, 200) || "Unknown"}`,
-            layer: 2,
-            note: "Version-specific match not found, but plugin has known vulnerabilities"
-          };
-        }
-      }
-    } catch (error) {
-      console.log(`[Layer 2] ${source.name} API error:`, error.message);
-    }
-  }
-
-  return { hit: false, layer: 2, message: "No vulnerabilities found in external APIs" };
-};
-
-const checkLayer3 = async (slug, version, targetUrl = null) => {
-  return new Promise((resolve) => {
-    console.log(`[Layer 3] Connecting to AI agent at ${AI_WS_URL}...`);
-    
-    const ws = new WebSocket(AI_WS_URL);
-    let progress = [];
-    let resolved = false;
-
-    const timeout = setTimeout(() => {
-      if (!resolved) {
-        ws.close();
-        resolve({
-          hit: false,
-          layer: 3,
-          error: "AI agent timeout (20m)",
-          progress: progress
-        });
-        resolved = true;
-      }
-    }, 1200000);
-
-    ws.on('open', () => {
-      console.log(`[Layer 3] Connected, sending analysis request for ${slug} v${version}`);
-      progress.push("Connected to AI agent");
-      
-      // Build proper request with context
-      const requestData = {
-        type: "request",
-        request_id: `layer3_${slug}_${Date.now()}`,
-        params: {
-          slug: slug,
-          version: version,
-          analysis_type: "plugin_cve_analysis"
-        }
-      };
-
-      // Add target URL if available for context
-      if (targetUrl) {
-        requestData.params.target_url = targetUrl;
-        requestData.params.analysis_type = "targeted_plugin_analysis";
-      }
-
-      ws.send(JSON.stringify(requestData));
-    });
-
-    ws.on('message', (data) => {
-      try {
-        const response = JSON.parse(data.toString());
-        
-        if (response.type === "progress") {
-          progress.push(response.message);
-          console.log(`[Layer 3 Progress] ${response.message}`);
-        }
-        else if (response.type === "response") {
-          clearTimeout(timeout);
-          ws.close();
-          
-          if (!resolved) {
-            const result = {
-              hit: response.cves && response.cves.length > 0,
-              layer: 3,
-              source: "AI Agent",
-              cves: response.cves || [],
-              raw_response: response.raw || "",
-              progress: progress
-            };
-            
-            if (result.hit) {
-              result.severity = "High";
-              result.cve = result.cves[0]?.id || "AI-Detected";
-              result.description = `AI detected ${result.cves.length} potential vulnerabilities`;
-            }
-            
-            console.log(`[Layer 3] AI analysis complete: ${result.hit ? 'Vulnerabilities found' : 'No vulnerabilities'}`);
-            resolve(result);
-            resolved = true;
-          }
-        }
-      } catch (error) {
-        console.log(`[Layer 3] Message parse error:`, error.message);
-      }
-    });
-
-    ws.on('error', (error) => {
-      if (!resolved) {
-        clearTimeout(timeout);
-        resolve({
-          hit: false,
-          layer: 3,
-          error: `AI connection failed: ${error.message}`,
-          progress: progress
-        });
-        resolved = true;
-      }
-    });
-
-    ws.on('close', () => {
-      if (!resolved) {
-        clearTimeout(timeout);
-        resolve({
-          hit: false, 
-          layer: 3,
-          error: "AI connection closed unexpectedly",
-          progress: progress
-        });
-        resolved = true;
-      }
-    });
-  });
-};
-
-/* ============================================================
-   UPDATED WPScan ROUTE with Complete 3-Layer Flow
-============================================================ */
-app.get("/plugins", async (req, res) => {
-  const { url, apiKey } = req.query;
-  
-  if (!url || !url.startsWith("http")) {
-    return res.status(400).json({ error: "Valid URL starting with http required" });
-  }
-
-  console.log(`[WPScan] Running scan on ${url}`);
-  const hasDocker = await checkDocker();
-  if (!hasDocker) {
-    return res.json({ 
-      ok: true, 
-      plugins: [],
-      warning: "Docker not available",
-      data: await fallbackPluginDetection(url)
-    });
-  }
-
-  const args = [
-    "run", "--rm", "wpscanteam/wpscan",
-    "--url", url,
-    "--enumerate", "ap",
-    "--format", "json", 
-    "--no-banner",
-    "--random-user-agent",
-    "--max-threads", "10"
-  ];
-
-  if (apiKey && apiKey.trim()) {
-    args.push("--api-token", apiKey.trim());
-    console.log(`[WPScan] Using premium API mode`);
-  } else {
-    args.push("--plugins-detection", "aggressive");
-    console.log(`[WPScan] Using free mode`);
-  }
-
-  const proc = spawn("docker", args);
-  let stdout = "";
-  let stderr = "";
-
-  proc.stdout.on("data", (data) => stdout += data.toString());
-  proc.stderr.on("data", (data) => stderr += data.toString());
-
-  proc.on("close", async (code) => {
-    console.log(`[WPScan] Process exited with code ${code}`);
-    
-    const json = extractJSON(stdout + "\n" + stderr);
-    if (!json) {
-      return res.json({ 
-        ok: false, 
-        error: "Failed to parse WPScan JSON"
-      });
-    }
-
-    // Process detected plugins
-    const detectedPlugins = [];
-    if (json.plugins && Object.keys(json.plugins).length > 0) {
-      for (const [slug, info] of Object.entries(json.plugins)) {
-        detectedPlugins.push({
-          slug: slug,
-          version: info.version?.number || "Unknown",
-          confidence: info.confidence || 100,
-          source: apiKey ? "wpscan_premium" : "wpscan_free",
-          wpscan_vulns: info.vulnerabilities || []
-        });
-      }
-      console.log(`[WPScan] Found ${detectedPlugins.length} plugins`);
-    }
-
-    // 🚀 NEW: Run complete 3-layer analysis on all found plugins
-    console.log(`[CVE Flow] Starting 3-layer CVE analysis for ${detectedPlugins.length} plugins...`);
-    
-    const analysisResults = [];
-    for (let i = 0; i < detectedPlugins.length; i++) {
-      const plugin = detectedPlugins[i];
-      console.log(`\n[${i+1}/${detectedPlugins.length}] Analyzing: ${plugin.slug} v${plugin.version}`);
-      
-      const completeAnalysis = await analyzePluginWithLayers(plugin.slug, plugin.version);
-      
-      analysisResults.push({
-        ...plugin,
-        complete_analysis: completeAnalysis,
-        risk_level: completeAnalysis.risk_level,
-        vulnerable: completeAnalysis.final_result?.hit || false
-      });
-
-      // Brief pause between plugins to avoid rate limits
-      if (i < detectedPlugins.length - 1) {
-        await new Promise(resolve => setTimeout(resolve, 1000));
-      }
-    }
-
-    // Generate summary
-    const vulnerablePlugins = analysisResults.filter(p => p.vulnerable);
-    const cleanPlugins = analysisResults.filter(p => !p.vulnerable);
-    
-    console.log(`\n[SUMMARY] Vulnerable: ${vulnerablePlugins.length}, Clean: ${cleanPlugins.length}`);
-
-    // Save comprehensive report
-    const report = {
-      target: url,
-      timestamp: new Date().toISOString(),
-      scan_mode: apiKey ? "premium" : "free",
-      summary: {
-        total_plugins: analysisResults.length,
-        vulnerable_plugins: vulnerablePlugins.length,
-        clean_plugins: cleanPlugins.length,
-        risk_level: vulnerablePlugins.length > 0 ? "HIGH" : "LOW"
-      },
-      wordpress: json.version ? {
-        version: json.version.number,
-        status: json.version.status,
-        vulnerabilities: json.version.vulnerabilities || []
-      } : null,
-      results: analysisResults
-    };
-    
-    const filename = path.join(SCAN_DIR, `complete_scan_${Date.now()}.json`);
-    fs.writeFileSync(filename, JSON.stringify(report, null, 2));
-    console.log(`[Report] Saved complete analysis to: ${filename}`);
-
-    res.json({ 
-      ok: true, 
-      plugins: analysisResults,
-      summary: report.summary,
-      wordpress: report.wordpress,
-      api_mode: apiKey ? "premium" : "free",
-      report_file: path.basename(filename)
-    });
-  });
-
-  proc.on("error", (error) => {
-    console.error("[WPScan] Process error:", error);
-    res.json({ ok: false, error: `WPScan failed: ${error.message}` });
-  });
-});
-
-/* ============================================================
-   INDIVIDUAL LAYER ENDPOINTS (for manual testing)
-============================================================ */
-app.get("/cve/analyze", async (req, res) => {
-  const { slug, version } = req.query;
-  
-  if (!slug || !version) {
-    return res.status(400).json({ error: "Missing slug or version parameters" });
-  }
-
-  console.log(`[Manual Analysis] Requested for ${slug} v${version}`);
-  
-  try {
-    const result = await analyzePluginWithLayers(slug, version);
-    res.json({ ok: true, analysis: result });
-  } catch (error) {
-    res.json({ ok: false, error: error.message });
-  }
-});
-
-// Keep your existing individual layer endpoints for backward compatibility
-app.get("/cve/layer1", async (req, res) => {
-  const { slug, version } = req.query;
-  if (!slug || !version) return res.json({ hit: false, error: "Missing params" });
-  
-  const result = await checkLayer1(slug, version);
-  res.json(result);
-});
-
-app.get("/cve/layer2", async (req, res) => {
-  const { slug, version } = req.query;
-  if (!slug || !version) return res.json({ hit: false, error: "Missing params" });
-  
-  const result = await checkLayer2(slug, version);
-  res.json(result);
-});
-
-app.get("/cve/layer3", async (req, res) => {
-  const { slug, version } = req.query;
-  if (!slug || !version) return res.json({ hit: false, error: "Missing params" });
-  
-  const result = await checkLayer3(slug, version);
-  res.json(result);
-});
+// ... keep the rest of your existing routes (analyze/url, health, etc.)
 
 app.get("/analyze/url", async (req, res) => {
   const { url } = req.query;
@@ -1105,7 +1078,6 @@ app.get("/health", (req, res) => {
 const server = http.createServer(app);
 server.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));
 
-// WebSocket upgrade handler - only destroy if you don't need WebSocket server functionality
 server.on("upgrade", (req, socket, head) => {
   socket.destroy();
 });

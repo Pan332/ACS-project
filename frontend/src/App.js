@@ -587,7 +587,9 @@ function App() {
               }}
             >
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <strong style={{ color: "white" }}>{p.slug}</strong>
+                <strong style={{ color: p.vulnerable ? "#f85149" : "white" }}>
+                  {p.vulnerable && "🚨 "}{p.slug}
+                </strong>
                 {p.confidence && (
                   <span
                     style={{
@@ -606,14 +608,19 @@ function App() {
                 {p.version ? `v${p.version}` : "Unknown Version"}
               </div>
               <div style={{ fontSize: "12px", color: "#8b949e", marginTop: "5px" }}>
-                Source: {p.source === "wpscan_premium" ? "🔑 Premium Database" : "🆓 Free Detection"}
+                Source: {p.source === "wpscan_premium" ? "🔑 Premium Database" : p.source === "wpscan_free" ? "🆓 Free Detection" : p.source}
               </div>
+              {p.vulnerable && (
+                <div style={{ fontSize: "12px", color: "#f85149", marginTop: "5px", fontWeight: "bold" }}>
+                  ⚠️ VULNERABLE - Click ANALYZE for details
+                </div>
+              )}
               <button
                 onClick={() => analyzePlugin(p)}
                 style={{
                   float: "right",
                   cursor: "pointer",
-                  background: "#1f6feb",
+                  background: p.vulnerable ? "#da3633" : "#1f6feb",
                   color: "white",
                   border: "none",
                   padding: "4px 12px",

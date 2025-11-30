@@ -399,8 +399,8 @@ const checkLayer3 = async (slug, version) => {
       let done = false;
       const timeout = setTimeout(() => { if (!done) { done = true; ws.close(); resolve(null); } }, 300000);
       ws.on("open", () => {
-        ws.send(JSON.stringify({ type: "request", request_id: `risk_${slug}_${Date.now()}`, params: { slug, version } }));
-      });
+      ws.send(JSON.stringify({ type: "request", request_id: `risk_${slug}_${Date.now()}`, params: { slug, version, analysis_type: "plugin_cve_analysis" } }));
+    });
       ws.on("message", (msg) => {
         try {
           const data = JSON.parse(msg.toString());
@@ -1039,7 +1039,7 @@ app.get("/analyze/url", async (req, res) => {
   if (!url) return res.json({ success: false, error: "Missing URL" });
   console.log(`[AI URL] Analyzing ${url}`);
   try {
-    const ws = new WebSocket("ws://192.168.40.130:9876");
+    const ws = new WebSocket(AI_WS_URL);
     let progress = [];
     return new Promise((resolve) => {
       const timeout = setTimeout(() => {
@@ -1050,12 +1050,17 @@ app.get("/analyze/url", async (req, res) => {
         ws.send(JSON.stringify({ type: "request", request_id: "url_" + Date.now(), params: { url, analysis_type: "full_wordpress_scan" } }));
       });
       ws.on("message", (msg) => {
-        const response = JSON.parse(msg.toString());
-        if (response.type === "progress") progress.push(response.message);
-        else if (response.type === "response") {
-          clearTimeout(timeout);
-          ws.close();
-          resolve(res.json({ success: true, url, analysis: response.cves || [], raw_findings: response.raw || "", progress }));
+        try {
+          const response = JSON.parse(msg.toString());
+          if (response.type === "progress") progress.push(response.message);
+          else if (response.type === "response") {
+            clearTimeout(timeout);
+            ws.close();
+            resolve(res.json({ success: true, url, analysis: response.cves || [], raw_findings: response.raw || "", progress }));
+          }
+        } catch (e) {
+          // ignore non-JSON fragments (CAI prints decorative text)
+          console.warn("[analyze/url] non-JSON message ignored");
         }
       });
       ws.on("error", (err) => {
@@ -1067,6 +1072,7 @@ app.get("/analyze/url", async (req, res) => {
     res.json({ success: false, error: e.message });
   }
 });
+
 
 app.get("/health", (req, res) => {
   res.json({ status: "ok", timestamp: new Date().toISOString() });

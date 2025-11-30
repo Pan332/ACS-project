@@ -1,0 +1,83 @@
+{
+  "ok": true,
+  "plugins": [
+    {
+      "slug": "akismet",
+      "version": "Unknown",
+      "confidence": 80,
+      "source": "wpscan_free",
+      "native_wpscan_vulns": [],
+      "custom_analysis": {
+        "hit": false,
+        "status": "Free mode - limited analysis"
+      }
+    },
+    {
+      "slug": "iwp-client",
+      "version": "Unknown",
+      "confidence": 80,
+      "source": "wpscan_free",
+      "native_wpscan_vulns": [],
+      "custom_analysis": {
+        "hit": false,
+        "status": "Free mode - limited analysis"
+      }
+    },
+    {
+      "slug": "social-warfare",
+      "version": "3.5.2",
+      "confidence": 80,
+      "source": "wpscan_free",
+      "native_wpscan_vulns": [],
+      "custom_analysis": {
+        "hit": false,
+        "status": "Free mode - limited analysis"
+      }
+    },
+    {
+      "slug": "wp-advanced-search",
+      "version": "3.3.3",
+      "confidence": 80,
+      "source": "wpscan_free",
+      "native_wpscan_vulns": [],
+      "custom_analysis": {
+        "hit": false,
+        "status": "Free mode - limited analysis"
+      }
+    },
+    {
+      "slug": "wp-file-upload",
+      "version": "Unknown",
+      "confidence": 80,
+      "source": "wpscan_free",
+      "native_wpscan_vulns": [],
+      "custom_analysis": {
+        "hit": false,
+        "status": "Free mode - limited analysis"
+      }
+    },
+    {
+      "slug": "wp-time-capsule",
+      "version": "1.21.15",
+      "confidence": 80,
+      "source": "wpscan_free",
+      "native_wpscan_vulns": [],
+      "custom_analysis": {
+        "hit": false,
+        "status": "Free mode - limited analysis"
+      }
+    }
+  ],
+  "wordpress": {
+    "version": "5.3",
+    "status": "insecure",
+    "vulnerabilities": [],
+    "detected": true
+  },
+  "api_mode": "free",
+  "scan_info": {
+    "plugins_found": 6,
+    "wordpress_detected": true
+  },
+  "found": true
+}

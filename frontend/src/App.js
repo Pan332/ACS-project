@@ -1,6 +1,7 @@
 // src/App.js
 import React, { useState, useEffect } from "react";
 
+
 function App() {
   const [url, setUrl] = useState("");
   const [wpscanApiKey, setWpscanApiKey] = useState("");
@@ -16,6 +17,8 @@ function App() {
   const [layerStatus, setLayerStatus] = useState("");
   const [cveResult, setCveResult] = useState(null);
   const [aiReport, setAiReport] = useState("");
+  // New: All scan vulnerabilities block
+  const [scanVulnerabilities, setScanVulnerabilities] = useState([]);
 
   const API_BASE = "http://localhost:4000";
 
@@ -49,6 +52,8 @@ function App() {
         const data = JSON.parse(saved);
         if (data.url) setUrl(data.url);
         setPluginsFound(data.plugins || []);
+        setScanVulnerabilities(data.vulnerabilities || []);
+        setCveResult(data); // Patch: set cveResult to the whole scan object
         setLayerStatus(
           `📁 Loaded previous scan from ${new Date(
             data.timestamp
@@ -109,6 +114,7 @@ function App() {
 
     if (data.ok && Array.isArray(data.plugins) && data.plugins.length > 0) {
       setPluginsFound(data.plugins);
+      setScanVulnerabilities(data.vulnerabilities || []);
       setScanStatus("plugins_found");
       setLayerStatus(
         `✅ Found ${data.plugins.length} plugins using ${
@@ -123,6 +129,7 @@ function App() {
           JSON.stringify({
             url: url,
             plugins: data.plugins,
+            vulnerabilities: data.vulnerabilities || [],
             timestamp: new Date().toISOString(),
             wordpress: data.wordpress,
           })
@@ -435,7 +442,7 @@ function App() {
       <div
         style={{
           marginBottom: "20px",
-          borderBottom: "1px solid #30363d",
+          borderBottom: "1px solid #303d3d",
           paddingBottom: "20px",
         }}
       >
@@ -699,6 +706,92 @@ function App() {
         <div style={{ flex: 1, minWidth: "300px", border: "1px solid #30363d", padding: "15px", background: "#010409" }}>
           <h3>Analysis Console</h3>
           <p>Status: <span style={{ color: "white" }}>{layerStatus}</span></p>
+
+          {/* New: All vulnerabilities block - Plugins + WordPress Core CVEs */}
+          {cveResult && cveResult.plugins && (
+            <div style={{ marginTop: "20px", padding: "10px", border: "1px solid #f85149", color: "#f85149", background: "#161b22", maxHeight: "600px", overflowY: "auto" }}>
+              <strong>🔎 Complete Scan Results</strong>
+              
+              {/* PLUGIN VULNERABILITIES SECTION */}
+              <div style={{ marginTop: "15px", borderTop: "1px solid #444", paddingTop: "10px" }}>
+                {(() => {
+                  const vulnerablePlugins = cveResult.plugins.filter(p => {
+                    const vuln = (cveResult.vulnerabilities || []).find(v => v.plugin === p.slug);
+                    return vuln && vuln.findings && vuln.findings.length > 0;
+                  });
+                  return vulnerablePlugins.length > 0 ? (
+                    <>
+                      <strong style={{ color: "#ff6b6b" }}>⚠️ Vulnerable Plugins ({vulnerablePlugins.length})</strong>
+                      <ul style={{ color: "#f85149", fontSize: "13px", marginTop: "10px", marginLeft: "15px" }}>
+                        {vulnerablePlugins.map((plugin, idx) => {
+                          const vuln = (cveResult.vulnerabilities || []).find(v => v.plugin === plugin.slug);
+                          return (
+                            <li key={idx} style={{ marginBottom: "12px", paddingBottom: "8px", borderBottom: "1px solid #333" }}>
+                              <div><b>Plugin:</b> {plugin.slug} <b>v{plugin.version}</b></div>
+                              {vuln.findings.map((f, j) => (
+                                <div key={j} style={{ marginLeft: "15px", marginTop: "5px", background: "#1a1a2e", padding: "5px", borderRadius: "3px" }}>
+                                  <b>CVE:</b> {f.cve} | <b>Severity:</b> {f.severity} <br/>
+                                  <b>Title:</b> {f.title}
+                                </div>
+                              ))}
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    </>
+                  ) : (
+                    <div style={{ color: "#3fb950", marginTop: "10px" }}>✅ No plugin vulnerabilities detected</div>
+                  );
+                })()}
+              </div>
+
+              {/* WORDPRESS CORE VULNERABILITIES SECTION */}
+              {cveResult.wordpress_core && cveResult.wordpress_core.vulnerabilities && cveResult.wordpress_core.vulnerabilities.length > 0 && (
+                <div style={{ marginTop: "20px", borderTop: "1px solid #444", paddingTop: "10px", color: "#58a6ff" }}>
+                  <strong style={{ color: "#58a6ff", fontSize: "15px" }}>🔒 WordPress Core CVEs ({cveResult.wordpress_core.vulnerabilities.length})</strong>
+                  <div style={{ fontSize: "12px", color: "#8b949e", marginTop: "5px" }}>WordPress v{cveResult.wordpress_core.version} - Status: {cveResult.wordpress_core.status}</div>
+                  <ul style={{ color: "#58a6ff", fontSize: "12px", marginTop: "10px", marginLeft: "15px" }}>
+                    {cveResult.wordpress_core.vulnerabilities.map((coreVuln, i) => (
+                      <li key={i} style={{ marginBottom: "15px", paddingBottom: "10px", borderBottom: "1px solid #222", background: "#0a0e27", padding: "8px", borderRadius: "3px" }}>
+                        <div><b>Title:</b> {coreVuln.title}</div>
+                        {coreVuln.fixed_in && <div style={{ marginTop: "3px" }}><b>Fixed In:</b> {coreVuln.fixed_in}</div>}
+                        {coreVuln.references && coreVuln.references.cve && (
+                          <div style={{ marginTop: "3px" }}><b>CVE(s):</b> <span style={{ color: "#f85149" }}>{Array.isArray(coreVuln.references.cve) ? coreVuln.references.cve.join(", ") : coreVuln.references.cve}</span></div>
+                        )}
+                        {coreVuln.references && coreVuln.references.url && (
+                          <div style={{ marginTop: "3px" }}><b>URLs:</b> 
+                            {Array.isArray(coreVuln.references.url) ? (
+                              <ul style={{ marginLeft: "15px", marginTop: "3px", listStyle: "none", padding: 0 }}>
+                                {coreVuln.references.url.map((u, j) => (
+                                  <li key={j} style={{ marginBottom: "2px" }}><a href={u} target="_blank" rel="noopener noreferrer" style={{ color: "#58a6ff", textDecoration: "underline", fontSize: "11px" }}>{u.substring(0, 60)}...</a></li>
+                                ))}
+                              </ul>
+                            ) : (
+                              <a href={coreVuln.references.url} target="_blank" rel="noopener noreferrer" style={{ color: "#58a6ff", textDecoration: "underline" }}>{coreVuln.references.url}</a>
+                            )}
+                          </div>
+                        )}
+                        {coreVuln.references && coreVuln.references.wpvulndb && (
+                          <div style={{ marginTop: "3px" }}><b>WPVulnDB:</b> {Array.isArray(coreVuln.references.wpvulndb) ? coreVuln.references.wpvulndb.join(", ") : coreVuln.references.wpvulndb}</div>
+                        )}
+                        {coreVuln.severity && <div style={{ marginTop: "3px" }}><b>Severity:</b> {coreVuln.severity}</div>}
+                        {coreVuln.references && Object.keys(coreVuln.references).filter(k => !['cve','url','wpvulndb'].includes(k)).length > 0 && (
+                          <div style={{ marginTop: "5px", fontSize: "11px", color: "#8b949e" }}>
+                            {Object.keys(coreVuln.references).filter(k => !['cve','url','wpvulndb'].includes(k)).map((k, j) => (
+                              <div key={j}><b>{k}:</b> {Array.isArray(coreVuln.references[k]) ? coreVuln.references[k].join(", ") : String(coreVuln.references[k])}</div>
+                            ))}
+                          </div>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                  <div style={{ fontSize: "11px", color: "#8b949e", marginTop: "10px", padding: "8px", background: "#0a0e27", borderRadius: "3px" }}>
+                    📊 Total CVEs shown: {cveResult.wordpress_core.vulnerabilities.length}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
 
           {fuzzStatus === "scanning" && (
             <div style={{ marginTop: "10px", padding: "10px", background: "#1a1a2e", border: "1px solid #8b5cf6" }}>

@@ -1,0 +1,51 @@
+{
+  "target": "http://192.168.1.20:31337",
+  "timestamp": "2025-11-30T08:39:55.669Z",
+  "tool": "FFUF Directory Bruteforce",
+  "fuzz_url": "http://192.168.1.20:31337/wp-content/plugins/FUZZ/",
+  "wordlist": "plugins.txt",
+  "scan_summary": {
+    "total_plugins_found": 2,
+    "analyzed_plugins": 2,
+    "vulnerable_plugins": 0,
+    "scan_duration": "N/A",
+    "status_codes_found": [
+      "403",
+      "500"
+    ]
+  },
+  "raw_ffuf_output": {
+    "stdout": "\n        /'___\\  /'___\\           /'___\\       \n       /\\ \\__/ /\\ \\__/  __  __  /\\ \\__/       \n       \\ \\ ,__\\\\ \\ ,__\\/\\ \\/\\ \\ \\ \\ ,__\\      \n        \\ \\ \\_/ \\ \\ \\_/\\ \\ \\_\\ \\ \\ \\ \\_/      \n         \\ \\_\\   \\ \\_\\  \\ \\____/  \\ \\_\\       \n          \\/_/    \\/_/   \\/___/    \\/_/       \n\n       v1.1.0-git\n________________________________________________\n\n :: Method           : GET\n :: URL              : http://192.168.1.20:31337/wp-content/plugins/FUZZ/\n :: Wordlist         : FUZZ: /wordlists/plugins.txt\n :: Output file      : /tmp/ffuf.json\n :: File format      : json\n :: Follow redirects : false\n :: Calibration      : false\n :: Timeout          : 10\n :: Threads          : 20\n :: Matcher          : Response status: 200,301,302,403,500\n________________________________________________\n\n\rakismet                 [Status: 403, Size: 280, Words: 20, Lines: 10]\n\rhello.php               [Status: 500, Size: 0, Words: 1, Lines: 1]\n",
+    "stderr": "\r:: Progress: [20/13369] :: Job [1/1] :: 0 req/sec :: Duration: [0:00:00] :: Errors: 0 ::\r:: Progress: [222/13369] :: Job [1/1] :: 0 req/sec :: Duration: [0:00:00] :: Errors: 0 ::\r:: Progress: [480/13369] :: Job [1/1] :: 0 req/sec :: Duration: [0:00:00] :: Errors: 0 ::\r:: Progress: [573/13369] :: Job [1/1] :: 0 req/sec :: Duration: [0:00:00] :: Errors: 0 ::\r:: Progress: [825/13369] :: Job [1/1] :: 0 req/sec :: Duration: [0:00:00] :: Errors: 0 ::\r:: Progress: [1178/13369] :: Job [1/1] :: 0 req/sec :: Duration: [0:00:00] :: Errors: 0 ::\r:: Progress: [1512/13369] :: Job [1/1] :: 0 req/sec :: Duration: [0:00:00] :: Errors: 0 ::\r:: Progress: [1804/13369] :: Job [1/1] :: 0 req/sec :: Duration: [0:00:00] :: Errors: 0 ::\r:: Progress: [2179/13369] :: Job [1/1] :: 0 req/sec :: Duration: [0:00:00] :: Errors: 0 ::\r:: Progress: [2596/13369] :: Job [1/1] :: 0 req/sec :: Duration: [0:00:00] :: Errors: 0 ::\r:: Progress: [2951/13369] :: Job [1/1] :: 0 req/sec :: Duration: [0:00:00] :: Errors: 0 ::\r:: Progress: [3404/13369] :: Job [1/1] :: 3404 req/sec :: Duration: [0:00:01] :: Errors: 0 ::\r:: Progress: [3866/13369] :: Job [1/1] :: 3866 req/sec :: Duration: [0:00:01] :: Errors: 0 ::\r:: Progress: [4097/13369] :: Job [1/1] :: 4097 req/sec :: Duration: [0:00:01] :: Errors: 0 ::\r:: Progress: [4516/13369] :: Job [1/1] :: 4516 req/sec :: Duration: [0:00:01] :: Errors: 0 ::\r:: Progress: [4611/13369] :: Job [1/1] :: 4611 req/sec :: Duration: [0:00:01] :: Errors: 0 ::\r:: Progress: [4891/13369] :: Job [1/1] :: 4891 req/sec :: Duration: [0:00:01] :: Errors: 0 ::\r:: Progress: [5334/13369] :: Job [1/1] :: 5334 req/sec :: Duration: [0:00:01] :: Errors: 0 ::\r:: Progress: [5724/13369] :: Job [1/1] :: 5724 req/sec :: Duration: [0:00:01] :: Errors: 0 ::\r:: Progress: [6156/13369] :: Job [1/1] :: 6156 req/sec :: Duration: [0:00:01] :: Errors: 0 ::\r:: Progress: [6588/13369] :: Job [1/1] :: 6588 req/sec :: Duration: [0:00:01] :: Errors: 0 ::\r:: Progress: [6999/13369] :: Job [1/1] :: 6999 req/sec :: Duration: [0:00:01] :: Errors: 0 ::\r:: Progress: [7456/13369] :: Job [1/1] :: 3728 req/sec :: Duration: [0:00:02] :: Errors: 0 ::\r:: Progress: [8007/13369] :: Job [1/1] :: 4003 req/sec :: Duration: [0:00:02] :: Errors: 0 ::\r:: Progress: [8415/13369] :: Job [1/1] :: 4207 req/sec :: Duration: [0:00:02] :: Errors: 0 ::\r:: Progress: [8805/13369] :: Job [1/1] :: 4402 req/sec :: Duration: [0:00:02] :: Errors: 0 ::\r:: Progress: [9312/13369] :: Job [1/1] :: 4656 req/sec :: Duration: [0:00:02] :: Errors: 0 ::\r:: Progress: [9737/13369] :: Job [1/1] :: 4868 req/sec :: Duration: [0:00:02] :: Errors: 0 ::\r:: Progress: [10202/13369] :: Job [1/1] :: 5101 req/sec :: Duration: [0:00:02] :: Errors: 0 ::\r:: Progress: [10679/13369] :: Job [1/1] :: 5339 req/sec :: Duration: [0:00:02] :: Errors: 0 ::\r:: Progress: [11174/13369] :: Job [1/1] :: 5587 req/sec :: Duration: [0:00:02] :: Errors: 0 ::\r:: Progress: [11454/13369] :: Job [1/1] :: 5727 req/sec :: Duration: [0:00:02] :: Errors: 0 ::\r:: Progress: [11730/13369] :: Job [1/1] :: 3910 req/sec :: Duration: [0:00:03] :: Errors: 0 ::\r:: Progress: [11965/13369] :: Job [1/1] :: 3988 req/sec :: Duration: [0:00:03] :: Errors: 0 ::\r:: Progress: [12189/13369] :: Job [1/1] :: 4063 req/sec :: Duration: [0:00:03] :: Errors: 0 ::\r:: Progress: [12313/13369] :: Job [1/1] :: 4104 req/sec :: Duration: [0:00:03] :: Errors: 0 ::\r:: Progress: [12595/13369] :: Job [1/1] :: 4198 req/sec :: Duration: [0:00:03] :: Errors: 0 ::\r:: Progress: [12843/13369] :: Job [1/1] :: 4281 req/sec :: Duration: [0:00:03] :: Errors: 0 ::\r:: Progress: [13016/13369] :: Job [1/1] :: 4338 req/sec :: Duration: [0:00:03] :: Errors: 0 ::\r:: Progress: [13126/13369] :: Job [1/1] :: 4375 req/sec :: Duration: [0:00:03] :: Errors: 0 ::\r:: Progress: [13366/13369] :: Job [1/1] :: 4455 req/sec :: Duration: [0:00:03] :: Errors: 0 ::\r:: Progress: [13369/13369] :: Job [1/1] :: 4456 req/sec :: Duration: [0:00:03] :: Errors: 0 ::\r:: Progress: [13369/13369] :: Job [1/1] :: 4456 req/sec :: Duration: [0:00:03] :: Errors: 0 ::\n"
+  },
+  "discovered_plugins": [
+    "akismet",
+    "hello.php"
+  ],
+  "detailed_analysis": [
+    {
+      "slug": "akismet",
+      "version": "Unknown",
+      "analysis": {
+        "slug": "akismet",
+        "version": "Unknown",
+        "risk": "Unknown Version",
+        "source": "Skipped"
+      },
+      "vulnerable": false,
+      "source": "FFUF Discovery"
+    },
+    {
+      "slug": "hello.php",
+      "version": "Unknown",
+      "analysis": {
+        "slug": "hello.php",
+        "version": "Unknown",
+        "risk": "Unknown Version",
+        "source": "Skipped"
+      },
+      "vulnerable": false,
+      "source": "FFUF Discovery"
+    }
+  ]
+}

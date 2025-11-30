@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Async MCP Glue — Fixed output capture for AI responses
+Async MCP Glue — with forced model switching to deepseek
 """
 
 import asyncio
@@ -11,36 +11,6 @@ import sys
 import time
 import websockets
 
-
-def sanitize_raw_output(raw: str) -> str:
-    """Clean common interactive/boxed prefixes so JSON can be extracted.
-
-    Removes lines with box-drawing characters, leading '[CAI OUTPUT]' prefixes,
-    line numbers, and stray vertical bars so patterns like JSON objects/arrays
-    can be matched robustly.
-    """
-    if not raw:
-        return raw
-
-    # Remove ANSI escape sequences
-    raw = re.sub(r"\x1B\[[0-9;]*[A-Za-z]", "", raw)
-
-    # Remove boxed border lines (╭─, ╰─ etc.) and lines made only of box chars
-    raw = "\n".join([ln for ln in raw.splitlines() if not re.match(r"^[\s╭╮╯╰─═]+$", ln)])
-
-    # Remove leading '[CAI OUTPUT]' or similar prefixes up to the first '│' if present
-    raw = re.sub(r"^\s*\[[^\]]+\]\s*│\s*", "", raw, flags=re.MULTILINE)
-
-    # Remove leading numeric line markers like '   1 ' or ' 10 ' at line starts
-    raw = re.sub(r"^\s*\d+\s+", "", raw, flags=re.MULTILINE)
-
-    # Remove leftover vertical bars or gutters at line starts
-    raw = re.sub(r"^\s*[│|>\|]+\s*", "", raw, flags=re.MULTILINE)
-
-    # Trim excessive whitespace
-    raw = raw.strip()
-    return raw
-
 # === CONFIG ===
 CAI_BIN = os.path.expanduser("~/cai/cai_env/bin/cai")
 AI_MODEL = "deepseek/deepseek-chat"
@@ -50,7 +20,7 @@ KALI_IP = "192.168.1.20"
 # Timeouts
 STARTUP_DRAIN_TIMEOUT = 30.0
 AGENT_SWITCH_TIMEOUT = 30.0
-HUNT_TIMEOUT = 1000.0
+HUNT_TIMEOUT = 300.0  # Reduced from 1000 to 300 seconds
 
 # Track current agent to avoid unnecessary switches
 current_agent = None
@@ -102,128 +72,216 @@ async def send_cmd(proc, cmd, drain_timeout=2.0, verbose=True):
 async def switch_model(proc, model_name):
     """Switch to specified model"""
     global current_model
-    
+
     if current_model == model_name:
         print(f"[MCP] Model {model_name} already active, skipping switch")
         return True
-        
+
     print(f"[MCP] Switching to model: {model_name}")
     out, err = await send_cmd(proc, f"/model {model_name}", drain_timeout=AGENT_SWITCH_TIMEOUT, verbose=True)
-    
+
     current_model = model_name
     print(f"[MCP] Model context set to: {model_name}")
     return True
 
 async def switch_agent(proc, agent_name):
-    """Switch to specified agent if not already active"""
+    """Switch to specified agent with proper output handling"""
     global current_agent
-    
+
     if current_agent == agent_name:
         print(f"[MCP] Agent {agent_name} already active, skipping switch")
         return True
-        
+
     print(f"[MCP] Switching to agent: {agent_name}")
-    out, err = await send_cmd(proc, f"/agent {agent_name}", drain_timeout=AGENT_SWITCH_TIMEOUT, verbose=True)
-    
-    # Just accept whatever happens and update current agent
+
+    # Clear any existing output
+    try:
+        await drain_stream(proc.stdout, timeout=0.5, verbose=False)
+    except:
+        pass
+
+    # Send the switch command
+    if proc.stdin:
+        proc.stdin.write(f"/agent {agent_name}\n".encode())
+        await proc.stdin.drain()
+
+    # Wait and read the response properly
+    output = ""
+    start_time = time.time()
+    while time.time() - start_time < AGENT_SWITCH_TIMEOUT:
+        try:
+            chunk = await asyncio.wait_for(proc.stdout.read(1024), timeout=1.0)
+            if chunk:
+                decoded = chunk.decode('utf-8', errors='ignore')
+                output += decoded
+                print(f"[AGENT SWITCH] {decoded.strip()}")
+
+                # Check for success indicators
+                if "Switched to agent" in output or agent_name in output:
+                    current_agent = agent_name
+                    print(f"[MCP] Agent switch successful: {agent_name}")
+                    return True
+                # Check for failure
+                if "not found" in output or "error" in output.lower():
+                    print(f"[MCP] Agent switch failed: {output}")
+                    return False
+            else:
+                await asyncio.sleep(0.1)
+        except asyncio.TimeoutError:
+            # If we have output and it's been a while, check if switch worked
+            if output and len(output) > 50:
+                current_agent = agent_name
+                print(f"[MCP] Agent switch assumed successful: {agent_name}")
+                return True
+            continue
+
+    # Timeout - assume it worked
     current_agent = agent_name
-    print(f"[MCP] Agent context set to: {agent_name}")
+    print(f"[MCP] Agent switch timeout, assuming: {agent_name}")
     return True
 
-async def hunt_plugin(proc, slug, version):
-    """Send hunt command to CAI and capture ALL output (non-blocking)."""
-    cmd = f"Hunt CVEs for WordPress plugin {slug} version {version}. Return ONLY JSON array with keys: cve, severity, desc, poc."
-    await send_cmd(proc, cmd, drain_timeout=0.2, verbose=True)  # prime
+async def execute_cai_command(proc, command):
+    """
+    Execute a CAI command. `command` can be:
+      - dict  -> will be serialized to JSON and sent as structured command
+      - str   -> will be sent as a natural-language line (backwards compatibility)
+    Returns the raw captured output from CAI.
+    """
+    # Clear any buffered output first
+    try:
+        while True:
+            await asyncio.wait_for(proc.stdout.read(1024), timeout=0.05)
+    except (asyncio.TimeoutError, asyncio.CancelledError):
+        pass
+
+    # If command is a dict, send structured JSON (this is what interactive CAI expects)
+    if isinstance(command, dict):
+        payload = json.dumps(command, ensure_ascii=False)
+        to_send = payload + "\n"
+        print(f"[MCP] Sending structured JSON to CAI: {payload}")
+    else:
+        to_send = str(command) + "\n"
+        print(f"[MCP] Sending NL command to CAI: {command}")
+
+    if proc.stdin:
+        proc.stdin.write(to_send.encode())
+        await proc.stdin.drain()
+
     output = ""
-    # read for up to HUNT_TIMEOUT seconds
-    start = time.time()
-    while time.time() - start < HUNT_TIMEOUT:
-        line = await proc.stdout.readline()
-        if not line:
-            await asyncio.sleep(0.05)
-            continue
-        s = line.decode(errors='ignore')
-        print(f"[CAI OUTPUT] {s.strip()}")
-        output += s
-        # try to detect JSON array start
-        if re.search(r'\[\s*{', output):
-            # try to find end bracket for a JSON array
-            if ']' in output:
+    start_time = time.time()
+    response_complete = False
+    lines_since_last_output = 0
+
+    # More robust output monitoring
+    while time.time() - start_time < HUNT_TIMEOUT and not response_complete:
+        try:
+            chunk = await asyncio.wait_for(proc.stdout.read(4096), timeout=2.0)
+            if chunk:
+                decoded = chunk.decode('utf-8', errors='ignore')
+                output += decoded
+                print(f"[CAI OUTPUT CHUNK] {decoded.strip()}")
+
+                # Reset counter when we get output
+                lines_since_last_output = 0
+
+                # Look for completion patterns in the actual CAI output format
+                completion_indicators = [
+                    '"type": "response"',   # direct JSON response
+                    'Current: I:',          # Cost/usage info
+                    'Session: $',           # Session info
+                    'Context:',             # Context usage
+                    'CAI>',                 # Prompt ready
+                    '╰─',                   # Box footer characters
+                    'Total: I:',            # Total usage
+                ]
+
+                if any(indicator in decoded for indicator in completion_indicators):
+                    # small delay to capture trailing fragments
+                    await asyncio.sleep(1.0)
+                    # If we've seen a JSON response, we can stop sooner
+                    if '"type": "response"' in output or '"cves":' in output:
+                        response_complete = True
+                        break
+                    # otherwise allow the loop to continue a bit more
+            else:
+                lines_since_last_output += 1
+                if lines_since_last_output > 10 and len(output) > 100:
+                    response_complete = True
+                    break
+                await asyncio.sleep(0.1)
+
+        except asyncio.TimeoutError:
+            lines_since_last_output += 1
+            if lines_since_last_output > 5 and len(output) > 500:
+                response_complete = True
                 break
-        # Also break on any JSON-like structure
-        if re.search(r'\{"type":\s*"response"', output):
-            break
-    return output.strip()
+            continue
+
+    print(f"[MCP] Command execution completed, output length: {len(output)}")
+    return output
+
+def extract_cves_from_output(raw):
+    """Extract CVEs from CAI output using multiple strategies"""
+    cves = []
+    raw_response = ""
+
+    # Strategy 1: Look for the complete JSON response object with "type":"response"
+    json_pattern = r'\{\s*"type"\s*:\s*"response".*?"cves"\s*:\s*\[.*?\].*?\}'
+    match = re.search(json_pattern, raw, re.DOTALL | re.IGNORECASE)
+
+    if match:
+        try:
+            json_str = match.group(0)
+            # Clean undesirable characters
+            json_str = re.sub(r'[^\x09\x0A\x0D\x20-\x7E]', '', json_str)
+            parsed = json.loads(json_str)
+            if "cves" in parsed and isinstance(parsed["cves"], list):
+                for cve in parsed["cves"]:
+                    cves.append({
+                        "id": cve.get("cve") or cve.get("id") or cve.get("CVE") or "AI-Detected",
+                        "severity": cve.get("severity", "Unknown"),
+                        "title": cve.get("desc") or cve.get("title", ""),
+                        "poc": cve.get("poc", "")
+                    })
+                raw_response = parsed.get("raw", "Analysis completed")
+                print(f"[MCP] Extracted {len(cves)} CVEs from JSON response")
+                return cves, raw_response
+        except json.JSONDecodeError as e:
+            print(f"[MCP] JSON decode failed: {e}")
+
+    # Strategy 2: Find CVE strings in the free text
+    cve_pattern = r'CVE-\d{4}-\d+'
+    found_cves = re.findall(cve_pattern, raw)
+    if found_cves:
+        for cve_id in set(found_cves):
+            severity = "Medium"
+            desc = f"Vulnerability found: {cve_id}"
+            severity_match = re.search(rf'{re.escape(cve_id)}.*?(High|Medium|Low|Critical)', raw, re.IGNORECASE)
+            if severity_match:
+                severity = severity_match.group(1)
+            cves.append({
+                "id": cve_id,
+                "severity": severity,
+                "title": desc,
+                "poc": "Check raw output for details"
+            })
+        raw_response = "Multiple CVEs detected in security analysis"
+        print(f"[MCP] Extracted {len(cves)} CVEs from text analysis")
+        return cves, raw_response
+
+    # Strategy 3: No CVEs found
+    # === MEANING B: REMOVE the fake NO-CVES-FOUND result ===
+    # Return an empty list instead of a synthetic CVE object.
+    print("[MCP] No CVEs found in analysis")
+    return [], "Security analysis completed"
 
 async def scan_url(proc, url):
-    """Perform full WordPress scan for URL analysis with COMPLETE output capture."""
-    cmd = f"Perform full WordPress security scan on {url}. Return ONLY JSON with vulnerabilities found."
-    await send_cmd(proc, cmd, drain_timeout=0.2, verbose=True)
-    
-    output = ""
-    start = time.time()
-    last_activity = start
-    
-    print(f"[MCP] Starting scan for {url}, waiting for AI analysis...")
-    
-    # Wait a moment for the AI to start processing
-    await asyncio.sleep(2.0)
-    
-    # Use buffered reading to capture ALL output
-    while time.time() - start < HUNT_TIMEOUT:
-        try:
-            # Read larger chunks to capture complete output
-            chunk = await asyncio.wait_for(proc.stdout.read(8192), timeout=10.0)
-            if chunk:
-                decoded = chunk.decode(errors='ignore')
-                output += decoded
-                print(f"[CAI CHUNK] Received {len(decoded)} chars")
-                last_activity = time.time()
-                
-                # Check for completion markers in the accumulated output
-                if re.search(r'\{"type":\s*"response".*"cves".*\}', output, re.DOTALL):
-                    print("[MCP] Found complete JSON response in output")
-                    break
-                    
-                # Check for analysis completion
-                if "Current:" in decoded and "Session:" in decoded and len(output) > 50000:
-                    print("[MCP] Detected analysis completion with stats")
-                    break
-                    
-                # Check for final CAI prompt with substantial content
-                if "CAI>" in decoded and len(output) > 30000:
-                    print("[MCP] CAI prompt detected with substantial output, breaking")
-                    break
-                    
-            else:
-                # No data available, check if we should continue waiting
-                if time.time() - last_activity > 20.0:
-                    print(f"[MCP] No activity for 20s, breaking after {time.time() - start:.1f}s")
-                    break
-                await asyncio.sleep(0.5)
-                
-        except asyncio.TimeoutError:
-            # Check if we have enough output already
-            if len(output) > 50000:
-                print(f"[MCP] Timeout but have {len(output)} chars, breaking")
-                break
-            continue
-        except Exception as e:
-            print(f"[MCP] Error reading output: {e}")
-            break
-    
-    print(f"[MCP] Scan completed after {time.time() - start:.1f}s, total output: {len(output)} chars")
-    
-    # Save debug output to file
-    debug_file = f"/tmp/cai_scan_{int(time.time())}.txt"
-    try:
-        with open(debug_file, 'w') as f:
-            f.write(output)
-        print(f"[MCP] Full output saved to: {debug_file}")
-    except Exception as e:
-        print(f"[MCP] Could not save debug file: {e}")
-    
-    return output
+    """Perform full WordPress scan for URL analysis using structured JSON command."""
+    command_data = {
+        "url": url,
+        "analysis_type": "full_wordpress_scan"
+    }
+    return await execute_cai_command(proc, command_data)
 
 # global to hold proc for handler
 CAI_PROC = None
@@ -240,190 +298,81 @@ async def handle_ws(ws, path):
                 print(f"[MCP] JSON parse error: {e}")
                 await ws.send(json.dumps({"type":"response","error":"invalid json"}))
                 continue
-                
+
             if msg.get("type") != "request":
                 await ws.send(json.dumps({"type":"response","error":"unsupported message type"}))
                 continue
-                
+
             rid = msg.get("request_id","1")
             params = msg.get("params",{})
             analysis_type = params.get("analysis_type", "")
-            
+
             print(f"[MCP] Processing request {rid}, analysis_type: {analysis_type}")
-            
-            # Ensure we're using the correct model first
+
+            # Ensure correct model
             await switch_model(CAI_PROC, AI_MODEL)
-            
+
+            raw = ""
             # Determine which agent to use based on request type
             if "layer3" in rid or "plugin_cve_analysis" in analysis_type:
-                # Layer3 request - use frontline_agent for CVE analysis
                 await switch_agent(CAI_PROC, "frontline_agent")
                 slug = (params.get("slug") or "").strip()
                 version = (params.get("version") or "").strip()
-                
+
                 if not slug:
                     await ws.send(json.dumps({"type":"response","request_id":rid,"error":"missing slug"}))
                     continue
-                    
+
                 print(f"[MCP] Hunting plugin {slug} v{version} (rid={rid})")
-                raw = await hunt_plugin(CAI_PROC, slug, version)
-                
+
+                command_data = {
+                    "slug": slug,
+                    "version": version,
+                    "analysis_type": "plugin_cve_analysis"
+                }
+
+                raw = await execute_cai_command(CAI_PROC, command_data)
+
             elif "url" in rid or "full_wordpress_scan" in analysis_type:
-                # URL analysis request - use wp_hunter_agent for full scans
                 await switch_agent(CAI_PROC, "wp_hunter_agent")
                 url = (params.get("url") or "").strip()
-                
+
                 if not url:
                     await ws.send(json.dumps({"type":"response","request_id":rid,"error":"missing url"}))
                     continue
-                    
+
                 print(f"[MCP] Scanning URL {url} (rid={rid})")
                 raw = await scan_url(CAI_PROC, url)
-                
+
             else:
-                # Default to frontline_agent for unknown types
                 await switch_agent(CAI_PROC, "frontline_agent")
                 slug = (params.get("slug") or "").strip()
                 version = (params.get("version") or "").strip()
-                
+
                 if slug:
                     print(f"[MCP] Default hunting plugin {slug} v{version} (rid={rid})")
-                    raw = await hunt_plugin(CAI_PROC, slug, version)
+                    command_data = {
+                        "slug": slug,
+                        "version": version,
+                        "analysis_type": "plugin_cve_analysis"
+                    }
+                    raw = await execute_cai_command(CAI_PROC, command_data)
                 else:
                     await ws.send(json.dumps({"type":"response","request_id":rid,"error":"unknown request type"}))
                     continue
-            
-            print(f"[MCP] Raw output received: {len(raw)} total characters")
-            
-            # DEBUG: Check what we actually received
+
+            print(f"[MCP] Raw output received: {raw[:500]}...")
+
+            # DEBUG: lengths and samples
+            print(f"[MCP DEBUG] Raw length: {len(raw)}")
             if len(raw) > 1000:
-                print(f"[MCP DEBUG] First 500 chars: {raw[:500]}")
+                print(f"[MCP DEBUG] First 1000 chars: {raw[:1000]}")
                 print(f"[MCP DEBUG] Last 500 chars: {raw[-500:]}")
-            
-            # Try multiple JSON extraction patterns — sanitize decorated output first
-            cves = []
-            raw_response = ""
+            else:
+                print(f"[MCP DEBUG] Full output: {raw}")
 
-            cleaned_raw = sanitize_raw_output(raw)
-            if len(cleaned_raw) < len(raw):
-                print(f"[MCP] Sanitized output length: {len(cleaned_raw)} (original {len(raw)})")
+            cves, raw_response = extract_cves_from_output(raw)
 
-            # If the cleaned output starts with JSON object/array, try parsing directly
-            json_found = False
-            try:
-                start_char = cleaned_raw.lstrip()[0] if cleaned_raw.lstrip() else ''
-            except Exception:
-                start_char = ''
-
-            if start_char in ['{', '[']:
-                try:
-                    parsed_full = json.loads(cleaned_raw)
-                    print("[MCP] Parsed full cleaned output as JSON")
-                    if isinstance(parsed_full, dict) and "cves" in parsed_full:
-                        for c in parsed_full["cves"]:
-                            cves.append({
-                                "id": c.get("cve", c.get("id", "AI-Detected")),
-                                "severity": c.get("severity", "Unknown"),
-                                "title": c.get("desc", c.get("title", "")),
-                                "poc": c.get("poc", "")
-                            })
-                        raw_response = parsed_full.get("raw", "Analysis completed")
-                        json_found = True
-                    elif isinstance(parsed_full, list):
-                        for c in parsed_full:
-                            cves.append({
-                                "id": c.get("cve", c.get("id", "AI-Detected")),
-                                "severity": c.get("severity", "Unknown"),
-                                "title": c.get("desc", c.get("title", "")),
-                                "poc": c.get("poc", "")
-                            })
-                        json_found = True
-                except json.JSONDecodeError:
-                    # fall back to pattern search below
-                    pass
-
-            # Pattern search fallback: look for embedded JSON snippets inside cleaned_raw
-            if not json_found:
-                # Pattern 1: Look for the ACTUAL JSON in your output
-                json_patterns = [
-                    r'\{[^{}]*"type"[^{}]*"response"[^{}]*"cves"[^}]*\}',  # Compact response
-                    r'\{"type":\s*"response".*?"cves".*?\}',  # Basic response with cves
-                    r'\[\s*\{.*?"cve".*?\}\s*\]',  # Just the CVEs array
-                ]
-
-                for pattern in json_patterns:
-                    json_match = re.search(pattern, cleaned_raw, re.DOTALL)
-                    if json_match:
-                        try:
-                            json_str = json_match.group(0)
-                            print(f"[MCP] Found JSON with pattern: {pattern[:50]}...")
-                            # Normalize whitespace
-                            cleaned = re.sub(r'\s+', ' ', json_str)
-                            parsed = json.loads(cleaned)
-
-                            if "cves" in parsed:
-                                for c in parsed["cves"]:
-                                    cves.append({
-                                        "id": c.get("cve", c.get("id", "AI-Detected")),
-                                        "severity": c.get("severity", "Unknown"),
-                                        "title": c.get("desc", c.get("title", "")),
-                                        "poc": c.get("poc", "")
-                                    })
-                                raw_response = parsed.get("raw", "Analysis completed")
-                                print(f"[MCP] Successfully extracted {len(cves)} CVEs")
-                                json_found = True
-                                break
-
-                        except json.JSONDecodeError as e:
-                            print(f"[MCP] JSON decode error: {e}")
-                            continue
-            
-            # If no structured JSON found, extract security findings from raw text
-            if not json_found:
-                print("[MCP] No structured JSON found, extracting from raw analysis...")
-                
-                # Extract WordPress findings
-                if "wordpress" in raw.lower() or "wp-" in raw.lower():
-                    # Extract version information
-                    version_matches = re.findall(r'(?:wordpress|wp)[^0-9]*([0-9]+\.[0-9]+\.[0-9]+)', raw, re.IGNORECASE)
-                    for version in set(version_matches):
-                        cves.append({
-                            "id": f"WP-{version}",
-                            "severity": "High",
-                            "title": f"WordPress {version} detected - check for version-specific vulnerabilities",
-                            "poc": f"WordPress version {version} may contain known CVEs"
-                        })
-                
-                # Extract theme information
-                theme_matches = re.findall(r'theme[^:]*:[^0-9]*([0-9]+\.[0-9]+)', raw, re.IGNORECASE)
-                for theme_ver in set(theme_matches):
-                    cves.append({
-                        "id": f"Theme-{theme_ver}",
-                        "severity": "Medium", 
-                        "title": f"Theme version {theme_ver} detected",
-                        "poc": "Check theme for known vulnerabilities"
-                    })
-                
-                # Extract CVE mentions
-                cve_matches = re.findall(r'CVE-\d{4}-\d+', raw)
-                for cve_id in set(cve_matches):
-                    cves.append({
-                        "id": cve_id,
-                        "severity": "High",
-                        "title": f"Vulnerability mentioned: {cve_id}",
-                        "poc": "Refer to CVE database for details"
-                    })
-            
-            # Final fallback if nothing found
-            if not cves:
-                cves = [{
-                    "id": "SCAN-COMPLETED",
-                    "severity": "Info",
-                    "title": "Security scan completed",
-                    "poc": "Review the detailed analysis output"
-                }]
-                raw_response = f"Scan completed. Found {len(raw)} characters of analysis data."
-            
             response = {
                 "type": "response",
                 "request_id": rid,
@@ -431,19 +380,18 @@ async def handle_ws(ws, path):
                 "raw": raw_response,
                 "source": "cai-pipe-async",
                 "agent_used": current_agent,
-                "model_used": current_model,
-                "output_size": len(raw)
+                "model_used": current_model
             }
-            
-            print(f"[MCP] FINAL - Sending response with {len(cves)} findings")
-            print(f"[MCP] Response: {json.dumps(response, indent=2)}")
-            
+
+            print(f"[MCP] FINAL - Sending response with {len(cves)} CVEs")
+            print(f"[MCP] Response preview: {json.dumps(response)[:200]}...")
+
             try:
                 await ws.send(json.dumps(response))
                 print(f"[MCP] ✅ SUCCESS: Response sent for request {rid}")
             except Exception as e:
                 print(f"[MCP] ❌ ERROR sending response: {e}")
-            
+
     except websockets.ConnectionClosed:
         print(f"[MCP] Disconnected: {client_ip}")
     except Exception as e:
@@ -453,15 +401,15 @@ async def main():
     global CAI_PROC
     print("[MCP] Starting (async main)...")
     CAI_PROC = await start_cai()
-    
+
     # drain initial output with verbose logging
     print("[MCP] Draining initial output...")
     stdout_init = await drain_stream(CAI_PROC.stdout, timeout=STARTUP_DRAIN_TIMEOUT, verbose=True)
     stderr_init = await drain_stream(CAI_PROC.stderr, timeout=0.5, verbose=True)
-    
+
     # Force model switch to deepseek first
     await switch_model(CAI_PROC, AI_MODEL)
-    
+
     # Start with frontline_agent as default
     await switch_agent(CAI_PROC, "frontline_agent")
 

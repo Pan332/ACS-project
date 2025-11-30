@@ -1,0 +1,90 @@
+{
+  "target": "http://192.168.1.20:31337",
+  "timestamp": "2025-11-30T01:47:28.853Z",
+  "tool": "WPScan + Custom Layers",
+  "wordpress": {
+    "wordpress_version": "5.3",
+    "wordpress_status": "insecure",
+    "wordpress_vulnerabilities": [],
+    "detected": true
+  },
+  "results": [
+    {
+      "slug": "akismet",
+      "version": "Unknown",
+      "confidence": 80,
+      "source": "wpscan_free",
+      "native_wpscan_vulns": [],
+      "custom_analysis": {
+        "slug": "akismet",
+        "version": "Unknown",
+        "risk": "Unknown Version",
+        "source": "Skipped"
+      }
+    },
+    {
+      "slug": "iwp-client",
+      "version": "Unknown",
+      "confidence": 80,
+      "source": "wpscan_free",
+      "native_wpscan_vulns": [],
+      "custom_analysis": {
+        "slug": "iwp-client",
+        "version": "Unknown",
+        "risk": "Unknown Version",
+        "source": "Skipped"
+      }
+    },
+    {
+      "slug": "social-warfare",
+      "version": "3.5.2",
+      "confidence": 80,
+      "source": "wpscan_free",
+      "native_wpscan_vulns": [],
+      "custom_analysis": {
+        "hit": true,
+        "source": "Layer 1 (Local)",
+        "cve": "CVE-2019-9978",
+        "severity": "High (RCE)"
+      }
+    },
+    {
+      "slug": "wp-advanced-search",
+      "version": "3.3.3",
+      "confidence": 80,
+      "source": "wpscan_free",
+      "native_wpscan_vulns": [],
+      "custom_analysis": {
+        "hit": false,
+        "status": "Clean",
+        "message": "No CVEs found in 3 layers"
+      }
+    },
+    {
+      "slug": "wp-file-upload",
+      "version": "Unknown",
+      "confidence": 80,
+      "source": "wpscan_free",
+      "native_wpscan_vulns": [],
+      "custom_analysis": {
+        "slug": "wp-file-upload",
+        "version": "Unknown",
+        "risk": "Unknown Version",
+        "source": "Skipped"
+      }
+    },
+    {
+      "slug": "wp-time-capsule",
+      "version": "1.21.15",
+      "confidence": 80,
+      "source": "wpscan_free",
+      "native_wpscan_vulns": [],
+      "custom_analysis": {
+        "hit": true,
+        "source": "Layer 1 (Local)",
+        "cve": "CVE-2020-8772",
+        "severity": "Critical"
+      }
+    }
+  ]
+}

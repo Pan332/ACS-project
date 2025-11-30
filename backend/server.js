@@ -765,7 +765,7 @@ const checkLayer2 = async (slug, version) => {
   return { hit: false, layer: 2, message: "No vulnerabilities found in external APIs" };
 };
 
-const checkLayer3 = async (slug, version) => {
+const checkLayer3 = async (slug, version, targetUrl = null) => {
   return new Promise((resolve) => {
     console.log(`[Layer 3] Connecting to AI agent at ${AI_WS_URL}...`);
     
@@ -779,26 +779,35 @@ const checkLayer3 = async (slug, version) => {
         resolve({
           hit: false,
           layer: 3,
-          error: "AI agent timeout (5m)",
+          error: "AI agent timeout (20m)",
           progress: progress
         });
         resolved = true;
       }
-    }, 120000);
+    }, 1200000);
 
     ws.on('open', () => {
       console.log(`[Layer 3] Connected, sending analysis request for ${slug} v${version}`);
       progress.push("Connected to AI agent");
       
-      ws.send(JSON.stringify({
+      // Build proper request with context
+      const requestData = {
         type: "request",
         request_id: `layer3_${slug}_${Date.now()}`,
         params: {
           slug: slug,
           version: version,
-          analysis_type: "cve_analysis"
+          analysis_type: "plugin_cve_analysis"
         }
-      }));
+      };
+
+      // Add target URL if available for context
+      if (targetUrl) {
+        requestData.params.target_url = targetUrl;
+        requestData.params.analysis_type = "targeted_plugin_analysis";
+      }
+
+      ws.send(JSON.stringify(requestData));
     });
 
     ws.on('message', (data) => {
@@ -1062,8 +1071,8 @@ app.get("/analyze/url", async (req, res) => {
     return new Promise((resolve) => {
       const timeout = setTimeout(() => {
         ws.close();
-        resolve(res.json({ success: false, error: "Timeout (120s)", progress }));
-      }, 120000);
+        resolve(res.json({ success: false, error: "Timeout (1200s)", progress }));
+      }, 1200000);
       ws.on("open", () => {
         ws.send(JSON.stringify({ type: "request", request_id: "url_" + Date.now(), params: { url, analysis_type: "full_wordpress_scan" } }));
       });

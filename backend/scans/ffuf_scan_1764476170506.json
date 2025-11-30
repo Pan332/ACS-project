@@ -1,0 +1,51 @@
+{
+  "target": "http://192.168.1.20:31337",
+  "timestamp": "2025-11-30T04:16:10.504Z",
+  "tool": "FFUF Directory Bruteforce",
+  "fuzz_url": "http://192.168.1.20:31337/wp-content/plugins/FUZZ/",
+  "wordlist": "plugins.txt",
+  "scan_summary": {
+    "total_plugins_found": 2,
+    "analyzed_plugins": 2,
+    "vulnerable_plugins": 0,
+    "scan_duration": "N/A",
+    "status_codes_found": [
+      "403",
+      "500"
+    ]
+  },
+  "raw_ffuf_output": {
+    "stdout": "\n        /'___\\  /'___\\           /'___\\       \n       /\\ \\__/ /\\ \\__/  __  __  /\\ \\__/       \n       \\ \\ ,__\\\\ \\ ,__\\/\\ \\/\\ \\ \\ \\ ,__\\      \n        \\ \\ \\_/ \\ \\ \\_/\\ \\ \\_\\ \\ \\ \\ \\_/      \n         \\ \\_\\   \\ \\_\\  \\ \\____/  \\ \\_\\       \n          \\/_/    \\/_/   \\/___/    \\/_/       \n\n       v1.1.0-git\n________________________________________________\n\n :: Method           : GET\n :: URL              : http://192.168.1.20:31337/wp-content/plugins/FUZZ/\n :: Wordlist         : FUZZ: /wordlists/plugins.txt\n :: Output file      : /tmp/ffuf.json\n :: File format      : json\n :: Follow redirects : false\n :: Calibration      : false\n :: Timeout          : 10\n :: Threads          : 20\n :: Matcher          : Response status: 200,301,302,403,500\n________________________________________________\n\n\rakismet                 [Status: 403, Size: 280, Words: 20, Lines: 10]\n\rhello.php               [Status: 500, Size: 0, Words: 1, Lines: 1]\n",
+    "stderr": "\r:: Progress: [20/13369] :: Job [1/1] :: 0 req/sec :: Duration: [0:00:00] :: Errors: 0 ::\r:: Progress: [394/13369] :: Job [1/1] :: 0 req/sec :: Duration: [0:00:00] :: Errors: 0 ::\r:: Progress: [484/13369] :: Job [1/1] :: 0 req/sec :: Duration: [0:00:00] :: Errors: 0 ::\r:: Progress: [915/13369] :: Job [1/1] :: 0 req/sec :: Duration: [0:00:00] :: Errors: 0 ::\r:: Progress: [1380/13369] :: Job [1/1] :: 0 req/sec :: Duration: [0:00:00] :: Errors: 0 ::\r:: Progress: [1886/13369] :: Job [1/1] :: 0 req/sec :: Duration: [0:00:00] :: Errors: 0 ::\r:: Progress: [2309/13369] :: Job [1/1] :: 0 req/sec :: Duration: [0:00:00] :: Errors: 0 ::\r:: Progress: [2839/13369] :: Job [1/1] :: 0 req/sec :: Duration: [0:00:00] :: Errors: 0 ::\r:: Progress: [3387/13369] :: Job [1/1] :: 0 req/sec :: Duration: [0:00:00] :: Errors: 0 ::\r:: Progress: [3956/13369] :: Job [1/1] :: 0 req/sec :: Duration: [0:00:00] :: Errors: 0 ::\r:: Progress: [4557/13369] :: Job [1/1] :: 0 req/sec :: Duration: [0:00:00] :: Errors: 0 ::\r:: Progress: [4662/13369] :: Job [1/1] :: 0 req/sec :: Duration: [0:00:00] :: Errors: 0 ::\r:: Progress: [5051/13369] :: Job [1/1] :: 5051 req/sec :: Duration: [0:00:01] :: Errors: 0 ::\r:: Progress: [5655/13369] :: Job [1/1] :: 5655 req/sec :: Duration: [0:00:01] :: Errors: 0 ::\r:: Progress: [6244/13369] :: Job [1/1] :: 6244 req/sec :: Duration: [0:00:01] :: Errors: 0 ::\r:: Progress: [6870/13369] :: Job [1/1] :: 6870 req/sec :: Duration: [0:00:01] :: Errors: 0 ::\r:: Progress: [7498/13369] :: Job [1/1] :: 7498 req/sec :: Duration: [0:00:01] :: Errors: 0 ::\r:: Progress: [8175/13369] :: Job [1/1] :: 8175 req/sec :: Duration: [0:00:01] :: Errors: 0 ::\r:: Progress: [8747/13369] :: Job [1/1] :: 8747 req/sec :: Duration: [0:00:01] :: Errors: 0 ::\r:: Progress: [9325/13369] :: Job [1/1] :: 9325 req/sec :: Duration: [0:00:01] :: Errors: 0 ::\r:: Progress: [9917/13369] :: Job [1/1] :: 9917 req/sec :: Duration: [0:00:01] :: Errors: 0 ::\r:: Progress: [10522/13369] :: Job [1/1] :: 10522 req/sec :: Duration: [0:00:01] :: Errors: 0 ::\r:: Progress: [11035/13369] :: Job [1/1] :: 5517 req/sec :: Duration: [0:00:02] :: Errors: 0 ::\r:: Progress: [11640/13369] :: Job [1/1] :: 5820 req/sec :: Duration: [0:00:02] :: Errors: 0 ::\r:: Progress: [12271/13369] :: Job [1/1] :: 6135 req/sec :: Duration: [0:00:02] :: Errors: 0 ::\r:: Progress: [12916/13369] :: Job [1/1] :: 6458 req/sec :: Duration: [0:00:02] :: Errors: 0 ::\r:: Progress: [13369/13369] :: Job [1/1] :: 6684 req/sec :: Duration: [0:00:02] :: Errors: 0 ::\r:: Progress: [13369/13369] :: Job [1/1] :: 3342 req/sec :: Duration: [0:00:04] :: Errors: 0 ::\n"
+  },
+  "discovered_plugins": [
+    "akismet",
+    "hello.php"
+  ],
+  "detailed_analysis": [
+    {
+      "slug": "akismet",
+      "version": "Unknown",
+      "analysis": {
+        "slug": "akismet",
+        "version": "Unknown",
+        "risk": "Unknown Version",
+        "source": "Skipped"
+      },
+      "vulnerable": false,
+      "source": "FFUF Discovery"
+    },
+    {
+      "slug": "hello.php",
+      "version": "Unknown",
+      "analysis": {
+        "slug": "hello.php",
+        "version": "Unknown",
+        "risk": "Unknown Version",
+        "source": "Skipped"
+      },
+      "vulnerable": false,
+      "source": "FFUF Discovery"
+    }
+  ]
+}
